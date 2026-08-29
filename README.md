@@ -14,6 +14,8 @@ Starrkörpersimulation eines laufenden Unity/PhysX-Spiels von außen reproduzier
   fällt sonst auf den besten Annäherungsschlag zurück.
 - **Stärkeanzeige** – blendet die benötigte Zugstärke am Power-Bar ein.
 - **Auto-Aim-Assist** – dreht auf gehaltenem `[F]` die Kamera auf die gefundene Lösung.
+- **Parameter-Dump** – schreibt auf `[F9]` die gemessenen Physik-Parameter des laufenden
+  Spiels ins Log und als JSON (siehe unten).
 
 > Gedacht für Einzelspieler- und private Sitzungen.
 
@@ -51,10 +53,33 @@ dotnet build -p:GameDir="C:\Pfad\zum\Spiel"
 Directory.Build.props        GameDir + abgeleitete Pfade, Deploy-Schalter
 Local.props.example          Vorlage für maschinenspezifische Pfade (nicht im Git)
 GwyfAimbotMod/
-  Plugin.cs                  BepInEx-Einstiegspunkt, IL2CPP-Typregistrierung
+  Plugin.cs                  BepInEx-Einstiegspunkt, Config, IL2CPP-Typregistrierung
   AimbotBehaviour.cs         Zielerfassung, Suchzustandsautomat, HUD-Overlay
   TrajectorySimulator.cs     Bahnintegration
+  PhysicsParameterDump.cs    Auslesen der echten Physik-Parameter (Log + JSON)
 ```
+
+## Parameter-Dump
+
+Ein Druck auf `[F9]` (bindbar über `BepInEx/config/com.ammar.gwyf.aimbot.cfg`,
+Abschnitt `[Dump]`, Schlüssel `DumpKey`) schreibt einmalig den gesamten Physik-Zustand
+in das BepInEx-Log und zusätzlich als JSON nach
+`BepInEx/gwyf-physics-dump_<Zeitstempel>.json` – also neben `LogOutput.log`.
+
+Erfasst werden:
+
+| Block | Inhalt |
+|---|---|
+| `time` | `fixedDeltaTime`, `maximumDeltaTime`, `timeScale` |
+| `physicsGlobals` | Gravitation, `bounceThreshold`, Contact-Offset, Solver-Iterationen, Depenetration, Sleep-Threshold und die übrigen prozessweiten PhysX-Statics |
+| `rigidbody` | Masse, Drag, Trägheitstensor samt Rotation, Solver-Iterationen, `collisionDetectionMode`, `interpolation`, Constraints, Momentanzustand |
+| `ballColliders` | alle Collider des Balls mit Typ, Radius, `lossyScale` und `sharedMaterial` |
+| `ballMovement` | beide Drag-Sätze, Sand-/Glue-/Umgebungs-Drag, Zustand der Drag-Umschaltung, `m_maxForce` / `minForce` |
+| `m_PowerCurve` | alle Keyframes mit Zeit, Wert, Tangenten, Gewichten und Wrap-Modes |
+| `groundProbe`, `wallProbe` | Raycast nach unten bzw. in Blickrichtung: Trefferkollider, Normale und dessen `PhysicMaterial` |
+
+Da Materialien pro Bahn unterschiedlich sind, lohnt sich ein Dump je Loch; jeder Druck
+legt eine eigene Datei an.
 
 ## Stand
 
@@ -64,3 +89,7 @@ Spielverhalten ab. Bekannte Ursachen: kein Drehimpuls, fehlende Drag-Umschaltung
 Sekunde nach dem Schlag, ignorierte Trigger-Volumes (Booster, Förderbänder, Wasser),
 abweichender Zeitschritt. Überarbeitung in Richtung separater `PhysicsScene` mit dem
 Solver des Spiels ist geplant.
+
+Der Parameter-Dump ist der erste Schritt dorthin: Er liefert die Messwerte, mit denen
+die geratenen Konstanten im Simulator (`MAX_PHYSICS_SPEED`, `CUP_RADIUS`, die
+Default-Bounciness- und Reibungswerte) ersetzt werden.

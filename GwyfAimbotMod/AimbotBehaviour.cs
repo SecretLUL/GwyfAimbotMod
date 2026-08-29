@@ -83,6 +83,7 @@ namespace GwyfAimbotMod
             InitializeSweepAngles();
         }
 
+        [HideFromIl2Cpp]
         private void InitializeSweepAngles()
         {
             _candidateAngles.Clear();
@@ -98,6 +99,13 @@ namespace GwyfAimbotMod
 
         void Update()
         {
+            // Vor dem Zielabgleich, damit der Dump auch dann laeuft, wenn Ball oder Loch
+            // noch nicht gefunden sind - PhysicsParameterDump sucht sich den Ball selbst.
+            if (Plugin.DumpKey != null && Input.GetKeyDown(Plugin.DumpKey.Value))
+            {
+                PhysicsParameterDump.Run(_targetBall);
+            }
+
             FindTargets();
 
             if (_targetBall == null || _targetHole == null)
@@ -151,6 +159,7 @@ namespace GwyfAimbotMod
             }
         }
 
+        [HideFromIl2Cpp]
         private void StartNewSearch()
         {
             _searchState = SearchState.DirectEvaluation;
@@ -165,13 +174,15 @@ namespace GwyfAimbotMod
             _winningPath = null;
         }
 
+        [HideFromIl2Cpp]
         private void ClearPaths()
         {
             if (_solutionLineRenderer != null) _solutionLineRenderer.positionCount = 0;
             if (_liveAimLineRenderer != null) _liveAimLineRenderer.positionCount = 0;
         }
 
-        void FindTargets()
+        [HideFromIl2Cpp]
+        private void FindTargets()
         {
             if (_targetBall == null || !_targetBall.gameObject.activeInHierarchy || Time.time > _nextTargetSearchTime)
             {
@@ -286,6 +297,7 @@ namespace GwyfAimbotMod
             }
         }
 
+        [HideFromIl2Cpp]
         private float CalculateBallSpeed(float force, float maxPower)
         {
             float ratio = Mathf.Clamp01(force / maxPower);
@@ -299,6 +311,7 @@ namespace GwyfAimbotMod
             return evaluatedRatio * MAX_PHYSICS_SPEED;
         }
 
+        [HideFromIl2Cpp]
         private void UpdateLiveAimTrajectory()
         {
             if (_liveAimLineRenderer == null || _targetBall == null || _targetHole == null) return;
@@ -364,7 +377,8 @@ namespace GwyfAimbotMod
             }
         }
 
-        void ProcessSearchWithTimeBudget(float maxMs)
+        [HideFromIl2Cpp]
+        private void ProcessSearchWithTimeBudget(float maxMs)
         {
             if (_targetBall == null || _targetHole == null) return;
 
@@ -506,6 +520,7 @@ namespace GwyfAimbotMod
         /// <summary>
         /// Performs continuous 1D power search to find if any power sinks the ball at this angle
         /// </summary>
+        [HideFromIl2Cpp]
         private bool TryFindHoleInOneAtAngle(
             Vector3 testDir,
             Vector3 ballPos,
@@ -596,6 +611,7 @@ namespace GwyfAimbotMod
             UpdateSolutionVisuals();
         }
 
+        [HideFromIl2Cpp]
         private void CompleteSearchWithBestPath()
         {
             _searchState = SearchState.Completed;
@@ -613,6 +629,7 @@ namespace GwyfAimbotMod
             }
         }
 
+        [HideFromIl2Cpp]
         private void UpdateSolutionVisuals()
         {
             if (_solutionLineRenderer == null || _winningPath == null) return;
@@ -639,6 +656,7 @@ namespace GwyfAimbotMod
             }
         }
 
+        [HideFromIl2Cpp]
         private Rect GetPowerBarScreenRect()
         {
             if (_powerBarRect != null && _powerBarRect.gameObject.activeInHierarchy)
@@ -663,6 +681,7 @@ namespace GwyfAimbotMod
             return new Rect(barX, barY, barWidth, barHeight);
         }
 
+        [HideFromIl2Cpp]
         private float GetMaxPower()
         {
             if (_targetBall != null && _targetBall.m_maxForce != null && _targetBall.m_maxForce.Value > 100f)
@@ -676,6 +695,7 @@ namespace GwyfAimbotMod
             return 10500f;
         }
 
+        [HideFromIl2Cpp]
         private float GetCurrentPullForce()
         {
             if (_worldPowerBar != null && _worldPowerBar.m_forceData != null)
@@ -762,6 +782,7 @@ namespace GwyfAimbotMod
             }
         }
 
+        [HideFromIl2Cpp]
         private void DrawColorBox(Rect rect, Color color)
         {
             Color oldBg = GUI.backgroundColor;
@@ -773,6 +794,7 @@ namespace GwyfAimbotMod
             GUI.color = oldColor;
         }
 
+        [HideFromIl2Cpp]
         private void DrawSimulatedPowerBar(float maxPower)
         {
             Rect barRect = GetPowerBarScreenRect();
