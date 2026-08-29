@@ -1,2 +1,22 @@
+# Build-Output
 bin/
 obj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+
+# Maschinenspezifische Pfade
+Local.props
+
+# IDE
+.vs/
+.idea/
+*.DotSettings.user
+
+# Cpp2IL-/Interop-Dumps gehoeren nicht ins Repo (mehrere GB, generiert)
+cpp2il_out*/
+dumps/
+
+# Aufgezeichnete Referenzbahnen (spaeter: Kalibrierdaten)
+traces/*.json

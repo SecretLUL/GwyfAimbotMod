@@ -1,60 +1,39 @@
 <Project Sdk="Microsoft.NET.Sdk">
+
   <PropertyGroup>
     <TargetFramework>net6.0</TargetFramework>
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>disable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
+    <!-- Loader-/Spiel-Assemblies liegen zur Laufzeit schon vor: nicht ins Output kopieren. -->
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
   </PropertyGroup>
 
+  <!-- BepInEx-Kern -->
   <ItemGroup>
-    <Compile Remove="scratch\**" />
-    <EmbeddedResource Remove="scratch\**" />
-    <None Remove="scratch\**" />
+    <Reference Include="0Harmony"                 HintPath="$(BepInExCoreDir)\0Harmony.dll"                 Private="false" />
+    <Reference Include="BepInEx.Core"             HintPath="$(BepInExCoreDir)\BepInEx.Core.dll"             Private="false" />
+    <Reference Include="BepInEx.Unity.IL2CPP"     HintPath="$(BepInExCoreDir)\BepInEx.Unity.IL2CPP.dll"     Private="false" />
+    <Reference Include="Il2CppInterop.Runtime"    HintPath="$(BepInExCoreDir)\Il2CppInterop.Runtime.dll"    Private="false" />
+    <Reference Include="Il2CppInterop.Common"     HintPath="$(BepInExCoreDir)\Il2CppInterop.Common.dll"     Private="false" />
   </ItemGroup>
 
+  <!-- Von Il2CppInterop generierte Spiel-/Unity-Assemblies -->
   <ItemGroup>
-    <Reference Include="0Harmony">
-      <HintPath>..\BepInEx\core\0Harmony.dll</HintPath>
-    </Reference>
-    <Reference Include="BepInEx.Core">
-      <HintPath>..\BepInEx\core\BepInEx.Core.dll</HintPath>
-    </Reference>
-    <Reference Include="BepInEx.Unity.IL2CPP">
-      <HintPath>..\BepInEx\core\BepInEx.Unity.IL2CPP.dll</HintPath>
-    </Reference>
-    <Reference Include="Il2CppInterop.Runtime">
-      <HintPath>..\BepInEx\core\Il2CppInterop.Runtime.dll</HintPath>
-    </Reference>
-    <Reference Include="Il2Cppmscorlib">
-      <HintPath>..\BepInEx\interop\Il2Cppmscorlib.dll</HintPath>
-    </Reference>
-    <Reference Include="Assembly-CSharp">
-      <HintPath>..\BepInEx\interop\Assembly-CSharp.dll</HintPath>
-    </Reference>
-    <Reference Include="UnityEngine.CoreModule">
-      <HintPath>..\BepInEx\interop\UnityEngine.CoreModule.dll</HintPath>
-    </Reference>
-    <Reference Include="UnityEngine.PhysicsModule">
-      <HintPath>..\BepInEx\interop\UnityEngine.PhysicsModule.dll</HintPath>
-    </Reference>
-    <Reference Include="UnityEngine.IMGUIModule">
-      <HintPath>..\BepInEx\interop\UnityEngine.IMGUIModule.dll</HintPath>
-    </Reference>
-    <Reference Include="UnityEngine.TextRenderingModule">
-      <HintPath>..\BepInEx\interop\UnityEngine.TextRenderingModule.dll</HintPath>
-    </Reference>
-    <Reference Include="UnityEngine.InputLegacyModule">
-      <HintPath>..\BepInEx\interop\UnityEngine.InputLegacyModule.dll</HintPath>
-    </Reference>
-    <Reference Include="UnityEngine.UI">
-      <HintPath>..\BepInEx\interop\UnityEngine.UI.dll</HintPath>
-    </Reference>
-    <Reference Include="Il2CppInterop.Common">
-      <HintPath>..\BepInEx\core\Il2CppInterop.Common.dll</HintPath>
-    </Reference>
+    <Reference Include="Il2Cppmscorlib"                     HintPath="$(InteropDir)\Il2Cppmscorlib.dll"                     Private="false" />
+    <Reference Include="Assembly-CSharp"                    HintPath="$(InteropDir)\Assembly-CSharp.dll"                    Private="false" />
+    <Reference Include="UnityEngine.CoreModule"             HintPath="$(InteropDir)\UnityEngine.CoreModule.dll"             Private="false" />
+    <Reference Include="UnityEngine.PhysicsModule"          HintPath="$(InteropDir)\UnityEngine.PhysicsModule.dll"          Private="false" />
+    <Reference Include="UnityEngine.IMGUIModule"            HintPath="$(InteropDir)\UnityEngine.IMGUIModule.dll"            Private="false" />
+    <Reference Include="UnityEngine.TextRenderingModule"    HintPath="$(InteropDir)\UnityEngine.TextRenderingModule.dll"    Private="false" />
+    <Reference Include="UnityEngine.InputLegacyModule"      HintPath="$(InteropDir)\UnityEngine.InputLegacyModule.dll"      Private="false" />
+    <Reference Include="UnityEngine.UI"                     HintPath="$(InteropDir)\UnityEngine.UI.dll"                     Private="false" />
   </ItemGroup>
-  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
-    <Copy SourceFiles="$(TargetPath)" DestinationFolder="..\BepInEx\plugins\" />
+
+  <Target Name="DeployToGame" AfterTargets="PostBuildEvent" Condition="'$(DeployToGame)' == 'true'">
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PluginsDir)" />
+    <Message Importance="high" Text="Deployed -> $(PluginsDir)\$(TargetFileName)" />
   </Target>
+
 </Project>

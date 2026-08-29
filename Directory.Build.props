@@ -1,0 +1,28 @@
+<Project>
+
+  <!--
+    Maschinenspezifische Pfade gehoeren in Local.props (steht im .gitignore).
+    Vorlage:  Local.props.example  ->  kopieren nach  Local.props
+  -->
+  <Import Project="$(MSBuildThisFileDirectory)Local.props"
+          Condition="Exists('$(MSBuildThisFileDirectory)Local.props')" />
+
+  <PropertyGroup>
+    <!-- Fallback: Steam-Standardpfad. Ueberschreibbar via Local.props oder -p:GameDir="..." -->
+    <GameDir Condition="'$(GameDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Golf With Your Friends</GameDir>
+
+    <BepInExDir>$(GameDir)\BepInEx</BepInExDir>
+    <BepInExCoreDir>$(BepInExDir)\core</BepInExCoreDir>
+    <InteropDir>$(BepInExDir)\interop</InteropDir>
+    <PluginsDir>$(BepInExDir)\plugins</PluginsDir>
+
+    <!-- Nach dem Build automatisch ins Spiel deployen. In Local.props abschaltbar. -->
+    <DeployToGame Condition="'$(DeployToGame)' == ''">true</DeployToGame>
+  </PropertyGroup>
+
+  <Target Name="VerifyGameDir" BeforeTargets="BeforeBuild">
+    <Error Condition="!Exists('$(InteropDir)')"
+           Text="Interop-Assemblies nicht gefunden unter '$(InteropDir)'.%0ASetze GameDir in Local.props (Vorlage: Local.props.example) oder baue mit -p:GameDir=&quot;C:\Pfad\zum\Spiel&quot;." />
+  </Target>
+
+</Project>

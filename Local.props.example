@@ -1,0 +1,12 @@
+<Project>
+  <PropertyGroup>
+    <!--
+      Diese Datei nach "Local.props" kopieren und den Pfad zur eigenen
+      Spielinstallation eintragen. Local.props wird nicht eingecheckt.
+    -->
+    <GameDir>C:\Program Files (x86)\Steam\steamapps\common\Golf With Your Friends</GameDir>
+
+    <!-- Auf false setzen, wenn der Build die DLL nicht ins Spiel kopieren soll. -->
+    <!-- <DeployToGame>false</DeployToGame> -->
+  </PropertyGroup>
+</Project>
