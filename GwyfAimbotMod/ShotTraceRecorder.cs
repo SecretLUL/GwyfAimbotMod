@@ -270,6 +270,10 @@ namespace GwyfAimbotMod
             Vector3 finalPos = _actual[_actual.Count - 1];
             float finalDist = Vector3.Distance(new Vector3(finalPos.x, 0f, finalPos.z), new Vector3(holePos.x, 0f, holePos.z));
             bool realSunk = ball.CollidingWithHole || ball.SucessfullyCompletedHole || finalDist < Mathf.Max(0.14f, cupRadius * 1.15f);
+            var player = ball.Player != null ? ball.Player : ball.m_player;
+            int strokeCount = player != null ? player.HitCounter : 1;
+            bool isHio = realSunk && (strokeCount <= 1);
+
             Vector3 launchDir = new Vector3(_startVelocity.x, 0f, _startVelocity.z);
             if (launchDir.sqrMagnitude > 0.0001f)
             {
@@ -284,11 +288,19 @@ namespace GwyfAimbotMod
                         _startForce,
                         _actual.ToArray(),
                         0f,
-                        isHoleInOne: true,
+                        isHoleInOne: isHio,
                         isLiveVerified: true);
 
-                    Plugin.Logger.LogInfo($"★ HOLE-IN-ONE IM SPIEL ERREICHT! In persistenten Cache gespeichert: {_sceneName} #{_holeNumber} (Kraft {_startForce:F0})");
-                    DiagnosticsLog.Line("cache", $"LIVE HOLE-IN-ONE VERIFIED & SAVED: hole {_holeNumber} force {_startForce:F0}");
+                    if (isHio)
+                    {
+                        Plugin.Logger.LogInfo($"★ HOLE-IN-ONE IM SPIEL ERREICHT! In persistenten Cache gespeichert: {_sceneName} #{_holeNumber} (Kraft {_startForce:F0})");
+                        DiagnosticsLog.Line("cache", $"LIVE HOLE-IN-ONE VERIFIED & SAVED: hole {_holeNumber} force {_startForce:F0}");
+                    }
+                    else
+                    {
+                        Plugin.Logger.LogInfo($"★ Schlag {strokeCount} eingelocht: {_sceneName} #{_holeNumber} (Kraft {_startForce:F0})");
+                        DiagnosticsLog.Line("cache", $"LIVE SINK (stroke {strokeCount}) VERIFIED: hole {_holeNumber} force {_startForce:F0}");
+                    }
                 }
                 else
                 {
@@ -299,9 +311,9 @@ namespace GwyfAimbotMod
                         launchDir,
                         _startForce,
                         finalDist,
-                        $"Live Schlag verfehlt (Rest: {finalDist:F2}m)");
+                        $"Live Schlag verfehlt (Schlag {strokeCount}, Rest: {finalDist:F2}m)");
 
-                    DiagnosticsLog.Line("cache", $"LIVE SHOT MISSED -> BLACKLISTED: hole {_holeNumber} force {_startForce:F0} rest {finalDist:F2}m");
+                    DiagnosticsLog.Line("cache", $"LIVE SHOT MISSED -> BLACKLISTED: hole {_holeNumber} stroke {strokeCount} force {_startForce:F0} rest {finalDist:F2}m");
                 }
             }
 

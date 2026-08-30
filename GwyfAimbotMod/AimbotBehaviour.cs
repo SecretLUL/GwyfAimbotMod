@@ -395,8 +395,30 @@ namespace GwyfAimbotMod
             rb.drag = _targetBall.dragToHitBall > 0 ? _targetBall.dragToHitBall : 0.35f;
             rb.angularDrag = _targetBall.angDragToHitBall > 0 ? _targetBall.angDragToHitBall : 0.05f;
 
-            // 5. Fire game shot lifecycle methods
+            // 5. Increment hit counter & update stroke count so scorecards track accurately
+            var player = _targetBall.Player != null ? _targetBall.Player : _targetBall.m_player;
+            if (player == null && _soFiller != null)
+            {
+                player = _soFiller.m_viewedUser;
+            }
+
+            if (player != null)
+            {
+                player.HitCounter++;
+                player.m_hitCounter = player.HitCounter;
+                player.LastHitForce = force;
+                player.HitForce = force;
+            }
+
+            if (_soFiller != null && _soFiller.m_hitCount != null)
+            {
+                int hits = player != null ? player.HitCounter : (_soFiller.m_hitCount.Value + 1);
+                _soFiller.m_hitCount.SetValue(hits);
+            }
+
+            // 6. Fire game shot lifecycle methods
             _targetBall.HasTakenShot = true;
+            _targetBall.m_isShotReadyToStart = false;
             _targetBall.OnShotStarted();
             _targetBall.ApplyOnShotStarted();
             if (_targetBall.m_CallOnShotTaken != null)
@@ -415,7 +437,8 @@ namespace GwyfAimbotMod
             DiagnosticsLog.Line("autoaim", "SHOT EXECUTED: force " + DiagnosticsLog.F(force)
                 + " (" + (force / maxPower * 100f).ToString("F1") + "%)"
                 + "  dir " + DiagnosticsLog.V(lookDir)
-                + "  speed " + DiagnosticsLog.F(speed) + " m/s");
+                + "  speed " + DiagnosticsLog.F(speed) + " m/s"
+                + "  hitCount " + (player != null ? player.HitCounter : 1));
             DiagnosticsLog.Flush();
         }
 
