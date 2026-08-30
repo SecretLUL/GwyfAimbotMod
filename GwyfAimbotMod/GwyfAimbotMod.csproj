@@ -33,7 +33,9 @@
 
   <Target Name="DeployToGame" AfterTargets="PostBuildEvent" Condition="'$(DeployToGame)' == 'true'">
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PluginsDir)" />
-    <Message Importance="high" Text="Deployed -> $(PluginsDir)\$(TargetFileName)" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\data\GwyfAimbot_Cache.json" DestinationFolder="$(PluginsDir)" Condition="Exists('$(MSBuildThisFileDirectory)..\data\GwyfAimbot_Cache.json')" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\data\GwyfAimbot_Cache.json" DestinationFolder="$(ConfigDir)\GwyfAimbotMod" Condition="Exists('$(MSBuildThisFileDirectory)..\data\GwyfAimbot_Cache.json')" />
+    <Message Importance="high" Text="Deployed -> $(PluginsDir)\$(TargetFileName) and Knowledge Base Cache" />
   </Target>
 
 </Project>

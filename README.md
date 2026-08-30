@@ -13,13 +13,18 @@ diverges after a few contacts and cannot be tuned into agreement. The trajectory
 ## Features
 
 - **Internal 1:1 Simulation** – Shots are simulated in a mirrored `PhysicsScene` driven by the
-  game's own PhysX solver (see below).
+  game's own PhysX solver.
+- **Reinforcement Learning & Knowledge Base** – Learns from every shot taken in-game. Successful Hole-in-Ones
+  are permanently saved and verified; missed shots are blacklisted to prune the search space automatically.
+- **Persistent Solution Cache (0s Latency)** – Known Hole-in-One trajectories are saved in
+  `data/GwyfAimbot_Cache.json` (and `BepInEx/config/GwyfAimbotMod/GwyfAimbot_Cache.json`). Upon entering a hole,
+  solutions load instantly with 0 ms search delay.
 - **Live Trajectory** – Draws the predicted trajectory for the current aiming direction
   and shot power as the shot is being charged.
-- **Solution Search** – Searches angle and power space for a trajectory that lands in the hole;
-  otherwise falls back to the best approach shot.
-- **Power Indicator** – Displays the required shot power on the power bar.
-- **Auto-Aim Assist** – Holding `[F]` smoothly rotates the camera toward the found solution.
+- **Multi-Stage Solution Search** – Hierarchical search engine (Direct Line scan → Adaptive 7-level multi-power
+  angle sweep → Flyby candidate refinement → Power band sweet-spot centering).
+- **Auto-Aim Execution ([F])** – Holding `[F]` locks the camera onto the target yaw and charges the
+  in-game power bar to the exact required force. Releasing `[F]` executes the shot cleanly with 100% precision.
 - **Shot Calibration** – The force→launch-speed factor is measured from real shots instead of
   being a hard-coded constant.
 - **Trace Comparison** – Every real shot is recorded and compared against its own prediction, so
@@ -27,7 +32,7 @@ diverges after a few contacts and cannot be tuned into agreement. The trajectory
 - **Session Log** – One file per session under `BepInEx/gwyf-diag/` containing the physics
   environment, how the shadow world was built, every shot, and where each prediction drifted.
 - **Parameter Dump** – Pressing `[F9]` logs the measured in-game physics parameters and exports
-  them as JSON (see below).
+  them as JSON.
 
 > Intended for singleplayer and private sessions.
 
@@ -49,7 +54,7 @@ cp Local.props.example Local.props     # Set GameDir to your game installation p
 dotnet build
 ```
 
-The build automatically copies `GwyfAimbotMod.dll` to `<GameDir>/BepInEx/plugins/`.
+The build automatically copies `GwyfAimbotMod.dll` and the Knowledge Base `GwyfAimbot_Cache.json` to `<GameDir>/BepInEx/plugins/` and `<GameDir>/BepInEx/config/GwyfAimbotMod/`.
 You can disable this by setting `<DeployToGame>false</DeployToGame>` in `Local.props`.
 
 Alternatively, without `Local.props`:
@@ -63,17 +68,49 @@ dotnet build -p:GameDir="C:\Path\To\Game"
 ```
 Directory.Build.props          GameDir + derived paths, deploy switch
 Local.props.example            Template for machine-specific paths (not tracked in Git)
+data/
+  GwyfAimbot_Cache.json        Persistent Knowledge Base (HIO solutions & blacklisted failed angles/powers)
 GwyfAimbotMod/
   Plugin.cs                    BepInEx entry point, configuration, IL2CPP type registration
-  AimbotBehaviour.cs           Target acquisition, search state machine, HUD overlay
+  AimbotBehaviour.cs           Target acquisition, search state machine, HUD overlay, Auto-Aim [F]
+  ShotSolutionCache.cs         Persistent JSON cache & blacklist self-learning engine
   ShadowPhysicsWorld.cs        Mirrors the hole into a local PhysicsScene (geometry + ball clone)
   ShadowTrajectorySimulator.cs Steps that scene with the game's solver - the 1:1 path
   ShotCalibration.cs           Measured force -> launch-speed factor
-  ShotTraceRecorder.cs         Records real shots, compares them against the prediction
+  ShotTraceRecorder.cs         Records real shots, compares against prediction, feeds the learning loop
   TrajectorySimulator.cs       Legacy approximate integrator (fallback only)
   JsonBuilder.cs               Minimal culture-invariant JSON writer
-  PhysicsParameterDump.cs      Extracts actual physics parameters (Log + JSON)
 ```
+
+## Reinforcement Learning & Persistent Knowledge Base
+
+The mod features a closed-loop self-learning system that evolves automatically during gameplay:
+
+```mermaid
+graph TD
+    A["Enter Hole / Spawn Ball"] --> B{"Check Cache (0 ms)"}
+    B -- "Cached HIO Found" --> C["Load & Display Immediately (★ [CACHE])"]
+    B -- "Not in Cache" --> D["Run Multi-Stage PhysX Search (Skipping Blacklist)"]
+    D --> E["Display Solution"]
+    C --> F["Player Hits Ball / Auto-Aim [F]"]
+    E --> F
+    F --> G["Live Shot Trace Recorder (200 Hz Sampling)"]
+    G --> H{"Ball Sunk in Live Play?"}
+    H -- "YES (Hole In One!)" --> I["Promote to 100% Verified HIO -> Save to Cache JSON"]
+    H -- "NO (Missed / Diverged)" --> J["Blacklist Angle & Power -> Save to Cache JSON"]
+```
+
+### 1. Positive Reinforcement (Cached Hole-in-Ones)
+- When a candidate shot successfully drops into the cup during physics simulation, it is cached in `data/GwyfAimbot_Cache.json`.
+- When the player executes the shot in the live game and the ball physically sinks, it is upgraded to **`IsLiveVerified: true`** with highest priority.
+- On subsequent visits to the same hole, the solution loads with **0 ms latency**, completely bypassing the multi-frame search.
+
+### 2. Negative Reinforcement (Blacklist Pruning)
+- If a real shot in the live game misses the hole, its exact launch angle ($\pm 1.25^\circ$) and force ($\pm 3.5\%$) are added to the **Blacklist** for that hole.
+- Future search sweeps automatically skip blacklisted candidate trajectories, ensuring the mod never repeats failed lines.
+
+### 3. Version-Tracked Knowledge Base (`data/GwyfAimbot_Cache.json`)
+The repository includes pre-mapped holes and verified shot trajectories under `data/GwyfAimbot_Cache.json`. This knowledge base is bundled with builds and updated as more holes are verified.
 
 ## Parameter Dump
 

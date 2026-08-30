@@ -115,23 +115,35 @@ namespace GwyfAimbotMod
         {
             lock (_lock)
             {
-                try
+                string[] possiblePaths = new[]
                 {
-                    if (!string.IsNullOrEmpty(_cacheFilePath) && File.Exists(_cacheFilePath))
+                    _cacheFilePath,
+                    Path.Combine(Paths.ConfigPath, "GwyfAimbotMod", "GwyfAimbot_Cache.json"),
+                    Path.Combine(Paths.PluginPath, "GwyfAimbot_Cache.json"),
+                    Path.Combine(Paths.PluginPath, "GwyfAimbotMod", "GwyfAimbot_Cache.json"),
+                    Path.Combine(Paths.PluginPath, "data", "GwyfAimbot_Cache.json")
+                };
+
+                foreach (var path in possiblePaths)
+                {
+                    try
                     {
-                        string json = File.ReadAllText(_cacheFilePath);
-                        var loaded = JsonSerializer.Deserialize<CacheRoot>(json);
-                        if (loaded != null && loaded.Holes != null)
+                        if (!string.IsNullOrEmpty(path) && File.Exists(path))
                         {
-                            _cache = loaded;
-                            Plugin.Logger.LogInfo($"ShotSolutionCache: Loaded {_cache.Holes.Count} hole cache entries from {_cacheFilePath}.");
-                            return;
+                            string json = File.ReadAllText(path);
+                            var loaded = JsonSerializer.Deserialize<CacheRoot>(json);
+                            if (loaded != null && loaded.Holes != null && loaded.Holes.Count > 0)
+                            {
+                                _cache = loaded;
+                                Plugin.Logger.LogInfo($"ShotSolutionCache: Loaded {_cache.Holes.Count} hole cache entries from {path}.");
+                                return;
+                            }
                         }
                     }
-                }
-                catch (Exception ex)
-                {
-                    Plugin.Logger.LogWarning("ShotSolutionCache: Error reading cache file, creating new cache: " + ex.Message);
+                    catch (Exception ex)
+                    {
+                        Plugin.Logger.LogWarning($"ShotSolutionCache: Error reading cache from {path}: {ex.Message}");
+                    }
                 }
 
                 _cache = new CacheRoot();
