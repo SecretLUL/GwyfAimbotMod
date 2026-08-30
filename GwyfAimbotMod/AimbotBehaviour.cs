@@ -35,6 +35,7 @@ namespace GwyfAimbotMod
         private SearchState _searchState = SearchState.Idle;
         private bool _isHoleInOne = false;
         private bool _hasSolution = false;
+        private bool _isAutoAiming = false;
 
         private Vector3[] _winningPath;
         private float _winningPower; // In actual Game Force units (0 to maxPower)
@@ -260,91 +261,160 @@ namespace GwyfAimbotMod
                 UpdateLiveAimTrajectory();
             }
 
-            // Auto-aim assist & Perfect execution (hold or press the configured key)
-            if (_hasSolution && Input.GetKey(Plugin.AutoAimKey.Value) && _winningDirection.sqrMagnitude > 0.001f)
+            // Auto-aim assist & Perfect execution (hold [F] to lock aim & power, release to fire!)
+            if (_hasSolution && _winningDirection.sqrMagnitude > 0.001f)
             {
-                Vector3 lookDir = new Vector3(_winningDirection.x, 0f, _winningDirection.z).normalized;
-                if (lookDir.sqrMagnitude > 0.001f)
+                if (Input.GetKey(Plugin.AutoAimKey.Value))
                 {
-                    float targetYaw = Mathf.Atan2(lookDir.x, lookDir.z) * Mathf.Rad2Deg;
+                    _isAutoAiming = true;
 
-                    var mouseAim = FindObjectOfType<MouseAim>();
-                    float currentPitch = 20f;
-                    if (mouseAim != null && mouseAim.m_trans != null)
+                    Vector3 lookDir = new Vector3(_winningDirection.x, 0f, _winningDirection.z).normalized;
+                    if (lookDir.sqrMagnitude > 0.001f)
                     {
-                        currentPitch = mouseAim.m_trans.eulerAngles.x;
-                    }
-                    else if (Camera.main != null)
-                    {
-                        currentPitch = Camera.main.transform.eulerAngles.x;
-                    }
+                        float targetYaw = Mathf.Atan2(lookDir.x, lookDir.z) * Mathf.Rad2Deg;
 
-                    Quaternion targetRot = Quaternion.Euler(currentPitch, targetYaw, 0f);
+                        var mouseAim = FindObjectOfType<MouseAim>();
+                        float currentPitch = 20f;
+                        if (mouseAim != null && mouseAim.m_trans != null)
+                        {
+                            currentPitch = mouseAim.m_trans.eulerAngles.x;
+                        }
+                        else if (Camera.main != null)
+                        {
+                            currentPitch = Camera.main.transform.eulerAngles.x;
+                        }
 
-                    // 1. Properly orient MouseAim (GWYF's camera controller)
-                    if (mouseAim != null)
-                    {
-                        if (mouseAim.m_trans != null)
+                        Quaternion targetRot = Quaternion.Euler(currentPitch, targetYaw, 0f);
+
+                        // 1. Properly orient MouseAim (GWYF's camera controller)
+                        if (mouseAim != null)
+                        {
+                            if (mouseAim.m_trans != null)
+                            {
+                                if (Plugin.AutoAimSnap.Value)
+                                {
+                                    mouseAim.m_trans.rotation = targetRot;
+                                }
+                                else
+                                {
+                                    mouseAim.m_trans.rotation = Quaternion.Slerp(mouseAim.m_trans.rotation, targetRot, Time.deltaTime * 35f);
+                                }
+                            }
+                            mouseAim.ResetRotation(new Vector3(currentPitch, targetYaw, 0f), 0f);
+                        }
+
+                        // 2. Orient Camera.main
+                        if (Camera.main != null)
                         {
                             if (Plugin.AutoAimSnap.Value)
                             {
-                                mouseAim.m_trans.rotation = targetRot;
+                                Camera.main.transform.rotation = targetRot;
                             }
                             else
                             {
-                                mouseAim.m_trans.rotation = Quaternion.Slerp(mouseAim.m_trans.rotation, targetRot, Time.deltaTime * 35f);
+                                Camera.main.transform.rotation = Quaternion.Slerp(Camera.main.transform.rotation, targetRot, Time.deltaTime * 35f);
                             }
                         }
-                        mouseAim.ResetRotation(new Vector3(currentPitch, targetYaw, 0f), 0f);
-                    }
 
-                    // 2. Orient Camera.main
-                    if (Camera.main != null)
-                    {
-                        if (Plugin.AutoAimSnap.Value)
+                        // 3. Set the exact required winning power into the power bar data & activate HUD
+                        if (_worldPowerBar != null)
                         {
-                            Camera.main.transform.rotation = targetRot;
+                            if (_worldPowerBar.m_forceData != null)
+                            {
+                                _worldPowerBar.m_forceData.SetValue(_winningPower);
+                            }
+                            _worldPowerBar.m_shootPressed = true;
+                            _worldPowerBar.m_playerTurn = true;
                         }
-                        else
+                        if (_soFiller != null && _soFiller.m_hitForce != null)
                         {
-                            Camera.main.transform.rotation = Quaternion.Slerp(Camera.main.transform.rotation, targetRot, Time.deltaTime * 35f);
+                            _soFiller.m_hitForce.SetValue(_winningPower);
                         }
-                    }
-
-                    // 3. Set the exact required winning power into the power bar data
-                    if (_worldPowerBar != null && _worldPowerBar.m_forceData != null)
-                    {
-                        _worldPowerBar.m_forceData.SetValue(_winningPower);
-                    }
-                    if (_soFiller != null && _soFiller.m_hitForce != null)
-                    {
-                        _soFiller.m_hitForce.SetValue(_winningPower);
-                    }
-
-                    // 4. If AutoShoot is enabled, execute shot cleanly on key down
-                    if (Plugin.AutoAimAutoShoot.Value && Input.GetKeyDown(Plugin.AutoAimKey.Value))
-                    {
-                        ExecuteShot();
                     }
                 }
+
+                // When AutoAim key is RELEASED, execute the perfect shot!
+                if (Input.GetKeyUp(Plugin.AutoAimKey.Value) && _isAutoAiming)
+                {
+                    _isAutoAiming = false;
+                    ExecuteShot();
+                }
+            }
+            else
+            {
+                _isAutoAiming = false;
             }
         }
 
         [HideFromIl2Cpp]
         private void ExecuteShot()
         {
-            if (_targetBall == null || !_hasSolution) return;
+            if (_targetBall == null || !_hasSolution || _winningDirection.sqrMagnitude < 0.001f) return;
 
+            var rb = _targetBall.m_rigidBody != null ? _targetBall.m_rigidBody : _targetBall.GetComponent<Rigidbody>();
+            if (rb == null) return;
+
+            Vector3 lookDir = new Vector3(_winningDirection.x, 0f, _winningDirection.z).normalized;
+            float maxPower = GetMaxPower();
+            float force = _winningPower;
+
+            // 1. Force data synchronization
             if (_worldPowerBar != null && _worldPowerBar.m_forceData != null)
             {
-                _worldPowerBar.m_forceData.SetValue(_winningPower);
+                _worldPowerBar.m_forceData.SetValue(force);
             }
             if (_soFiller != null && _soFiller.m_hitForce != null)
             {
-                _soFiller.m_hitForce.SetValue(_winningPower);
+                _soFiller.m_hitForce.SetValue(force);
             }
 
-            _targetBall.CheckForBallHit();
+            // 2. Exact camera & MouseAim lock
+            float targetYaw = Mathf.Atan2(lookDir.x, lookDir.z) * Mathf.Rad2Deg;
+            var mouseAim = FindObjectOfType<MouseAim>();
+            float currentPitch = 20f;
+            if (mouseAim != null && mouseAim.m_trans != null)
+            {
+                currentPitch = mouseAim.m_trans.eulerAngles.x;
+                mouseAim.m_trans.rotation = Quaternion.Euler(currentPitch, targetYaw, 0f);
+                mouseAim.ResetRotation(new Vector3(currentPitch, targetYaw, 0f), 0f);
+            }
+            if (Camera.main != null)
+            {
+                Camera.main.transform.rotation = Quaternion.Euler(currentPitch, targetYaw, 0f);
+            }
+
+            // 3. Compute launch velocity matching the 1:1 physics simulation
+            float speed = CalculateBallSpeed(force, maxPower);
+
+            // 4. Launch ball
+            rb.isKinematic = false;
+            rb.velocity = lookDir * speed;
+            rb.angularVelocity = Vector3.zero;
+            rb.drag = _targetBall.dragToHitBall > 0 ? _targetBall.dragToHitBall : 0.35f;
+            rb.angularDrag = _targetBall.angDragToHitBall > 0 ? _targetBall.angDragToHitBall : 0.05f;
+
+            // 5. Fire game shot lifecycle methods
+            _targetBall.HasTakenShot = true;
+            _targetBall.OnShotStarted();
+            _targetBall.ApplyOnShotStarted();
+            if (_targetBall.m_CallOnShotTaken != null)
+            {
+                _targetBall.m_CallOnShotTaken.Invoke();
+            }
+
+            if (_worldPowerBar != null)
+            {
+                _worldPowerBar.m_shootPressed = false;
+                _worldPowerBar.OnTakenShot();
+            }
+
+            _lastPullForce = force;
+
+            DiagnosticsLog.Line("autoaim", "SHOT EXECUTED: force " + DiagnosticsLog.F(force)
+                + " (" + (force / maxPower * 100f).ToString("F1") + "%)"
+                + "  dir " + DiagnosticsLog.V(lookDir)
+                + "  speed " + DiagnosticsLog.F(speed) + " m/s");
+            DiagnosticsLog.Flush();
         }
 
         void OnApplicationQuit()
@@ -1154,28 +1224,32 @@ namespace GwyfAimbotMod
             {
                 bool trustworthy = !_recorder.HasResult || _recorder.MaxDeviation < 0.25f;
 
-                GUI.color = trustworthy ? new Color(0.1f, 1f, 0.4f) : new Color(1f, 0.75f, 0.1f);
+                GUI.color = _isAutoAiming ? Color.cyan : (trustworthy ? new Color(0.1f, 1f, 0.4f) : new Color(1f, 0.75f, 0.1f));
                 GUI.Label(new Rect(20, 18, boxWidth - 20, 30),
-                    trustworthy
-                        ? "★ HOLE-IN-ONE GEFUNDEN! ★"
-                        : $"Hole-in-One (UNSICHER: letzte Abweichung {_recorder.MaxDeviation:F2} m)",
+                    _isAutoAiming
+                        ? "★ AUTO-AIM AKTIV: LASS [F] LOS ZUM SCHLAGEN! ★"
+                        : (trustworthy ? "★ HOLE-IN-ONE GEFUNDEN! ★" : $"Hole-in-One (UNSICHER: letzte Abweichung {_recorder.MaxDeviation:F2} m)"),
                     headerStyle);
 
                 float ratio = Mathf.Clamp01(_winningPower / maxPower);
                 GUI.color = Color.white;
-                GUI.Label(new Rect(20, 48, boxWidth - 20, 25), $"Benötigte Power: {_winningPower:F0} ({ratio * 100f:F1}%) | Halte [{Plugin.AutoAimKey.Value}] für Auto-Aim", subStyle);
+                GUI.Label(new Rect(20, 48, boxWidth - 20, 25), $"Benötigte Power: {_winningPower:F0} ({ratio * 100f:F1}%) | Halte [{Plugin.AutoAimKey.Value}] gedrückt & lass los zum Schlagen!", subStyle);
                 GUI.Label(new Rect(20, 72, boxWidth - 20, 25), $"Loch-Distanz: {Vector3.Distance(_targetBall.transform.position, _targetHole.HolePosition.position):F1}m", subStyle);
 
                 DrawSimulatedPowerBar(maxPower);
             }
             else if (_hasSolution && !_isHoleInOne)
             {
-                GUI.color = new Color(1f, 0.6f, 0.1f);
-                GUI.Label(new Rect(20, 18, boxWidth - 20, 30), $"Bester Annäherungsschlag (Rest: {_winningMinDist:F2}m)", headerStyle);
+                GUI.color = _isAutoAiming ? Color.cyan : new Color(1f, 0.6f, 0.1f);
+                GUI.Label(new Rect(20, 18, boxWidth - 20, 30),
+                    _isAutoAiming
+                        ? "★ AUTO-AIM AKTIV: LASS [F] LOS ZUM SCHLAGEN! ★"
+                        : $"Bester Annäherungsschlag (Rest: {_winningMinDist:F2}m)",
+                    headerStyle);
 
                 float ratio = Mathf.Clamp01(_winningPower / maxPower);
                 GUI.color = Color.white;
-                GUI.Label(new Rect(20, 48, boxWidth - 20, 25), $"Empfohlene Power: {_winningPower:F0} ({ratio * 100f:F1}%) | Halte [{Plugin.AutoAimKey.Value}] für Auto-Aim", subStyle);
+                GUI.Label(new Rect(20, 48, boxWidth - 20, 25), $"Empfohlene Power: {_winningPower:F0} ({ratio * 100f:F1}%) | Halte [{Plugin.AutoAimKey.Value}] gedrückt & lass los zum Schlagen!", subStyle);
                 GUI.Label(new Rect(20, 72, boxWidth - 20, 25), "Kein direkter 1-Hit-Pfad gefunden.", subStyle);
 
                 DrawSimulatedPowerBar(maxPower);
