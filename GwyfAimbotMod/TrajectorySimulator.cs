@@ -14,8 +14,22 @@ namespace GwyfAimbotMod
         public Vector3 FinalVelocity;
         public int TotalSteps;
         public int BounceCount;
+
+        /// <summary>Ball came to rest on its own instead of running out of simulation time.</summary>
+        public bool Rested;
+
+        /// <summary>Ball entered a water / out-of-bounds volume, so the shot is lost.</summary>
+        public bool HitHazard;
+
+        /// <summary>Simulated in-game seconds the shot took.</summary>
+        public float SimulatedSeconds;
     }
 
+    /// <summary>
+    /// Approximate, hand-written PhysX stand-in. Superseded by <see cref="ShadowTrajectorySimulator"/>,
+    /// which steps the game's own solver; this remains only as the fallback used while the shadow
+    /// world is still building or when local physics scenes are unavailable.
+    /// </summary>
     public static class TrajectorySimulator
     {
         private static readonly List<Vector3> s_PointBuffer = new List<Vector3>(1200);
