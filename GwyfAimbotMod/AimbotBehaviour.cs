@@ -36,6 +36,8 @@ namespace GwyfAimbotMod
         private bool _isHoleInOne = false;
         private bool _hasSolution = false;
         private bool _isAutoAiming = false;
+        private bool _isCachedSolution = false;
+        private bool _isLiveVerifiedSolution = false;
 
         private Vector3[] _winningPath;
         private float _winningPower; // In actual Game Force units (0 to maxPower)
@@ -440,6 +442,8 @@ namespace GwyfAimbotMod
             _searchState = SearchState.DirectEvaluation;
             _hasSolution = false;
             _isHoleInOne = false;
+            _isCachedSolution = false;
+            _isLiveVerifiedSolution = false;
             _directAngleIndex = 0;
             _currentAngleIndex = 0;
             _currentProbeIndex = 0;
@@ -454,6 +458,35 @@ namespace GwyfAimbotMod
 
             _winningMinDist = float.MaxValue;
             _winningPath = null;
+
+            // Fast-path: Check persistent cache for a known Hole-in-One on this hole & ball position
+            if (_targetBall != null && _targetHole != null)
+            {
+                string sceneName = _targetBall.gameObject.scene.name;
+                int holeNumber = (int)_targetBall.HoleNumber;
+                Vector3 ballPos = _targetBall.transform.position;
+
+                if (ShotSolutionCache.TryGetSolution(sceneName, holeNumber, ballPos, out var cachedSol))
+                {
+                    if (cachedSol.IsHoleInOne)
+                    {
+                        _winningDirection = cachedSol.Direction.ToVector3();
+                        _winningPower = cachedSol.Power;
+                        _winningMinDist = cachedSol.MinDistance;
+                        _isHoleInOne = true;
+                        _isCachedSolution = true;
+                        _isLiveVerifiedSolution = cachedSol.IsLiveVerified;
+                        _winningPath = cachedSol.GetPathArray();
+                        _hasSolution = true;
+                        _searchState = SearchState.Completed;
+
+                        Plugin.Logger.LogInfo($"ShotSolutionCache: Found cached HIO for {sceneName} #{holeNumber} (Verified: {_isLiveVerifiedSolution}, Power: {_winningPower:F0})");
+                        DiagnosticsLog.Line("cache", $"LOADED HIO FROM CACHE: hole {holeNumber} power {_winningPower:F0} live {_isLiveVerifiedSolution}");
+                        UpdateSolutionVisuals();
+                        return;
+                    }
+                }
+            }
 
             _shadowSim.ResetStats();
             PrepareSimulationContext();
@@ -844,6 +877,22 @@ namespace GwyfAimbotMod
 
             float probeFrac = ProbePowerFractions[_currentProbeIndex];
             float probeP = maxPower * probeFrac;
+
+            string sceneName = _targetBall.gameObject.scene.name;
+            int holeNumber = (int)_targetBall.HoleNumber;
+
+            if (ShotSolutionCache.IsBlacklisted(sceneName, holeNumber, ballPos, testDir, probeP))
+            {
+                // Skip blacklisted probe shot
+                _currentProbeIndex++;
+                if (_currentProbeIndex >= ProbePowerFractions.Length)
+                {
+                    _currentProbeIndex = 0;
+                    _currentAngleIndex++;
+                }
+                return false;
+            }
+
             float speed = CalculateBallSpeed(probeP, maxPower);
             var probeResult = RunSimulation(ballPos, testDir * speed, holePos, Plugin.ProbeSimSeconds.Value, 1);
 
@@ -931,6 +980,14 @@ namespace GwyfAimbotMod
             float testP = _scanLow + _scanIndex * _scanStep;
             _scanIndex++;
 
+            string sceneName = _targetBall.gameObject.scene.name;
+            int holeNumber = (int)_targetBall.HoleNumber;
+
+            if (ShotSolutionCache.IsBlacklisted(sceneName, holeNumber, ballPos, _scanDir, testP))
+            {
+                return false;
+            }
+
             var result = RunSimulation(ballPos, _scanDir * CalculateBallSpeed(testP, maxPower), holePos, simSeconds, 1);
 
             if (result.Sunk)
@@ -1004,6 +1061,14 @@ namespace GwyfAimbotMod
             _isHoleInOne = isHoleInOne;
             _hasSolution = true;
             _searchState = SearchState.Completed;
+
+            if (_targetBall != null)
+            {
+                string sceneName = _targetBall.gameObject.scene.name;
+                int holeNumber = (int)_targetBall.HoleNumber;
+                Vector3 ballPos = _targetBall.transform.position;
+                ShotSolutionCache.RecordSolution(sceneName, holeNumber, ballPos, direction, force, path, minDist, isHoleInOne, isLiveVerified: false);
+            }
 
             DiagnosticsLog.Line("search", (isHoleInOne ? "HOLE-IN-ONE" : "approach")
                 + "  force " + DiagnosticsLog.F(force)
@@ -1224,12 +1289,32 @@ namespace GwyfAimbotMod
             {
                 bool trustworthy = !_recorder.HasResult || _recorder.MaxDeviation < 0.25f;
 
-                GUI.color = _isAutoAiming ? Color.cyan : (trustworthy ? new Color(0.1f, 1f, 0.4f) : new Color(1f, 0.75f, 0.1f));
-                GUI.Label(new Rect(20, 18, boxWidth - 20, 30),
-                    _isAutoAiming
-                        ? "★ AUTO-AIM AKTIV: LASS [F] LOS ZUM SCHLAGEN! ★"
-                        : (trustworthy ? "★ HOLE-IN-ONE GEFUNDEN! ★" : $"Hole-in-One (UNSICHER: letzte Abweichung {_recorder.MaxDeviation:F2} m)"),
-                    headerStyle);
+                string title;
+                Color titleCol;
+
+                if (_isAutoAiming)
+                {
+                    title = "★ AUTO-AIM AKTIV: LASS [F] LOS ZUM SCHLAGEN! ★";
+                    titleCol = Color.cyan;
+                }
+                else if (_isLiveVerifiedSolution)
+                {
+                    title = "★ 100% VERIFIZIERTES HOLE-IN-ONE (CACHE) ★";
+                    titleCol = new Color(0.1f, 1f, 0.4f);
+                }
+                else if (_isCachedSolution)
+                {
+                    title = "★ HOLE-IN-ONE GELADEN (CACHE) ★";
+                    titleCol = new Color(0.2f, 0.9f, 1f);
+                }
+                else
+                {
+                    title = trustworthy ? "★ HOLE-IN-ONE GEFUNDEN! ★" : $"Hole-in-One (UNSICHER: letzte Abweichung {_recorder.MaxDeviation:F2} m)";
+                    titleCol = trustworthy ? new Color(0.1f, 1f, 0.4f) : new Color(1f, 0.75f, 0.1f);
+                }
+
+                GUI.color = titleCol;
+                GUI.Label(new Rect(20, 18, boxWidth - 20, 30), title, headerStyle);
 
                 float ratio = Mathf.Clamp01(_winningPower / maxPower);
                 GUI.color = Color.white;

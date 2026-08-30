@@ -36,6 +36,10 @@ namespace GwyfAimbotMod
         internal static ConfigEntry<float> AngleSpanDegrees;
         internal static ConfigEntry<int> PowerSubdivisions;
 
+        // ---- Cache & Selbstlernen ----
+        internal static ConfigEntry<bool> UseSolutionCache;
+        internal static ConfigEntry<bool> UseBlacklist;
+
         // ---- Kalibrierung ----
         internal static ConfigEntry<float> SpeedPerCurveUnit;
         internal static ConfigEntry<int> CalibrationSamples;
@@ -75,6 +79,18 @@ namespace GwyfAimbotMod
                 "AutoAimSnap",
                 true,
                 "Wenn true, rastet die Kamera sofort 100% praezise auf den Zielwinkel ein. Bei false dreht sie weich.");
+
+            UseSolutionCache = Config.Bind(
+                "Cache",
+                "UseSolutionCache",
+                true,
+                "Gefundene und im Spiel verifizierte Hole-In-One Loesungen persistent pro Map und Loch speichern und beim Betreten sofort laden (0s Suchzeit).");
+
+            UseBlacklist = Config.Bind(
+                "Cache",
+                "UseBlacklist",
+                true,
+                "Fehlgeschlagene Schlaege aus dem Spiel in die Blacklist aufnehmen und in kuenftigen Suchen automatisch ueberspringen (Selbstlernen).");
 
             UseShadowPhysics = Config.Bind(
                 "Simulation",
@@ -203,6 +219,7 @@ namespace GwyfAimbotMod
 
             DiagnosticsLog.Initialize(DiagnosticsEnabled.Value);
             ShotCalibration.Initialize(SpeedPerCurveUnit, CalibrationSamples);
+            ShotSolutionCache.Initialize(Paths.ConfigPath);
 
             Log.LogInfo("Aimbot Plugin Loaded!");
             Log.LogInfo($"Physik-Parameter-Dump auf Taste [{DumpKey.Value}] (aenderbar in {Config.ConfigFilePath}).");

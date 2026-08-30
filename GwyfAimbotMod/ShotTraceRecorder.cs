@@ -266,6 +266,45 @@ namespace GwyfAimbotMod
                 }
             }
 
+            // ---- Cache & Self-Learning Feedback Loop ----
+            Vector3 finalPos = _actual[_actual.Count - 1];
+            float finalDist = Vector3.Distance(new Vector3(finalPos.x, 0f, finalPos.z), new Vector3(holePos.x, 0f, holePos.z));
+            bool realSunk = ball.CollidingWithHole || ball.SucessfullyCompletedHole || finalDist < Mathf.Max(0.14f, cupRadius * 1.15f);
+            Vector3 launchDir = new Vector3(_startVelocity.x, 0f, _startVelocity.z);
+            if (launchDir.sqrMagnitude > 0.0001f)
+            {
+                launchDir.Normalize();
+                if (realSunk)
+                {
+                    ShotSolutionCache.RecordSolution(
+                        _sceneName,
+                        _holeNumber,
+                        _startPos,
+                        launchDir,
+                        _startForce,
+                        _actual.ToArray(),
+                        0f,
+                        isHoleInOne: true,
+                        isLiveVerified: true);
+
+                    Plugin.Logger.LogInfo($"★ HOLE-IN-ONE IM SPIEL ERREICHT! In persistenten Cache gespeichert: {_sceneName} #{_holeNumber} (Kraft {_startForce:F0})");
+                    DiagnosticsLog.Line("cache", $"LIVE HOLE-IN-ONE VERIFIED & SAVED: hole {_holeNumber} force {_startForce:F0}");
+                }
+                else
+                {
+                    ShotSolutionCache.RecordFailedShot(
+                        _sceneName,
+                        _holeNumber,
+                        _startPos,
+                        launchDir,
+                        _startForce,
+                        finalDist,
+                        $"Live Schlag verfehlt (Rest: {finalDist:F2}m)");
+
+                    DiagnosticsLog.Line("cache", $"LIVE SHOT MISSED -> BLACKLISTED: hole {_holeNumber} force {_startForce:F0} rest {finalDist:F2}m");
+                }
+            }
+
             DiagnosticsLog.Flush();
         }
 
