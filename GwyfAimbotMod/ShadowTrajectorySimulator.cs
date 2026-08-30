@@ -141,6 +141,8 @@ namespace GwyfAimbotMod
             // Sleep() zeroes both velocities and drops the actor's accumulated state, so every run
             // starts from the same place regardless of what the previous candidate shot did.
             rb.Sleep();
+            rb.transform.position = startPos;
+            rb.transform.rotation = startRot;
             rb.position = startPos;
             rb.rotation = startRot;
             rb.velocity = startVelocity;
@@ -148,11 +150,13 @@ namespace GwyfAimbotMod
             rb.drag = tuning.DragAfterHit + tuning.EnvironmentalDrag;
             rb.angularDrag = tuning.AngularDragAfterHit;
             rb.WakeUp();
+            Physics.SyncTransforms();
 
             _points.Clear();
             _points.Add(startPos);
 
             Vector3 pos = startPos;
+            Vector3 prevPos = startPos;
             Vector3 vel = startVelocity;
             Vector3 prevVel = startVelocity;
 
@@ -182,6 +186,7 @@ namespace GwyfAimbotMod
                 physics.Simulate(dt);
                 simTime += dt;
 
+                prevPos = pos;
                 pos = rb.position;
                 vel = rb.velocity;
 
@@ -196,35 +201,45 @@ namespace GwyfAimbotMod
 
                 if (step % pointStride == 0) _points.Add(pos);
 
-                float dist = Vector3.Distance(pos, holePos);
+                // Continuous segment check for distance and cup entry
+                Vector3 seg = pos - prevPos;
+                float segLenSqr = seg.sqrMagnitude;
+                Vector3 checkPoint = pos;
+                if (segLenSqr > 0.00001f)
+                {
+                    float t = Mathf.Clamp01(Vector3.Dot(holePos - prevPos, seg) / segLenSqr);
+                    checkPoint = prevPos + seg * t;
+                }
+
+                float dist = Vector3.Distance(checkPoint, holePos);
                 if (dist < minDist) minDist = dist;
 
                 // ---- cup ---------------------------------------------------------
-                float dx = pos.x - holePos.x;
-                float dz = pos.z - holePos.z;
+                float dx = checkPoint.x - holePos.x;
+                float dz = checkPoint.z - holePos.z;
                 float hDist = Mathf.Sqrt(dx * dx + dz * dz);
-                float vDist = pos.y - holePos.y;
+                float vDist = checkPoint.y - holePos.y;
 
                 if (hDist < cupRadius)
                 {
                     // Below the cup plane means the ball is physically inside the cup: the mirrored
                     // geometry already decided, no speed gate needed.
-                    if (vDist < -0.25f)
+                    if (vDist < -0.20f)
                     {
                         result.Sunk = true;
                         minDist = 0f;
-                        _points.Add(pos);
+                        _points.Add(checkPoint);
                         step++;
                         break;
                     }
 
                     // At cup level the cup may be a flat trigger rather than real geometry, so the
-                    // classic "slow enough to drop" gate still applies. This is the one heuristic left.
-                    if (vDist >= -0.25f && vDist <= 0.40f && mag <= maxCupEntrySpeed)
+                    // classic "slow enough to drop" gate still applies.
+                    if (vDist >= -0.30f && vDist <= 0.45f && mag <= maxCupEntrySpeed)
                     {
                         result.Sunk = true;
                         minDist = 0f;
-                        _points.Add(pos);
+                        _points.Add(checkPoint);
                         step++;
                         break;
                     }

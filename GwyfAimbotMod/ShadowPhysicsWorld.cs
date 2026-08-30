@@ -318,41 +318,76 @@ namespace GwyfAimbotMod
 
                 var rb = _ballObject.AddComponent<Rigidbody>();
 
-                // Mirror the whole ball hierarchy: the selectable ball shapes put the real collider
-                // on a child object, so root-only mirroring gives the wrong body.
+                // Mirror the true active ball collider only. Powerups, spikes, cosmetics, and forcefields
+                // must NEVER be attached to the shadow ball body as they create multi-body bumps and kinks.
                 _ballRadius = 0f;
                 int colliderCount = 0;
-                var srcCols = ball.GetComponentsInChildren<Collider>(false);
-                for (int i = 0; i < srcCols.Length; i++)
+
+                Collider activeCol = ball.Collider;
+                if (activeCol == null || !activeCol.enabled)
                 {
-                    var src = srcCols[i];
-                    if (src == null || !src.enabled || src.isTrigger) continue;
+                    activeCol = ball.GetComponent<Collider>();
+                }
+                if (activeCol == null || !activeCol.enabled)
+                {
+                    activeCol = ball.m_sphereCollider;
+                }
 
-                    GameObject target;
-                    if (src.transform == srcTransform)
-                    {
-                        target = _ballObject;
-                    }
-                    else
-                    {
-                        // Child collider: its own object under the ball root, so it belongs to the
-                        // same rigidbody exactly as in the live hierarchy.
-                        target = new GameObject("c" + i);
-                        target.layer = _ballObject.layer;
-                        target.transform.SetParent(_ballObject.transform, false);
-                    }
-
+                if (activeCol != null && activeCol.enabled && !activeCol.isTrigger)
+                {
                     Collider added;
-                    if (!SetupMirroredCollider(target, src, out added))
+                    if (SetupMirroredCollider(_ballObject, activeCol, out added))
                     {
-                        Plugin.Logger.LogWarning("Shadow world: ball collider '" + src.name
-                            + "' (" + ColliderKind(src) + ") could not be mirrored.");
-                        continue;
+                        colliderCount++;
+                        var sphere = added.TryCast<SphereCollider>();
+                        if (sphere != null)
+                        {
+                            _ballRadius = sphere.radius;
+                            sphere.contactOffset = 0.0001f;
+                        }
                     }
+                }
+                else
+                {
+                    // Fallback for custom ball shape shapes, excluding powerup and spike colliders
+                    var srcCols = ball.GetComponentsInChildren<Collider>(false);
+                    for (int i = 0; i < srcCols.Length; i++)
+                    {
+                        var src = srcCols[i];
+                        if (src == null || !src.enabled || src.isTrigger) continue;
 
-                    colliderCount++;
-                    var sphere = added.TryCast<SphereCollider>();
-                    if (sphere != null) _ballRadius = Mathf.Max(_ballRadius, sphere.radius);
+                        string colName = src.name.ToLowerInvariant();
+                        if (colName.Contains("spike") || colName.Contains("forcefield")
+                            || colName.Contains("powerup") || colName.Contains("trail")
+                            || colName.Contains("cosmetic") || colName.Contains("aura")
+                            || colName.Contains("silhouette") || colName.Contains("effect"))
+                        {
+                            continue;
+                        }
+
+                        GameObject target = (src.transform == srcTransform) ? _ballObject : new GameObject("c" + i);
+                        if (target != _ballObject)
+                        {
+                            target.layer = _ballObject.layer;
+                            target.transform.SetParent(_ballObject.transform, false);
+                        }
+
+                        Collider added;
+                        if (!SetupMirroredCollider(target, src, out added))
+                        {
+                            Plugin.Logger.LogWarning("Shadow world: ball collider '" + src.name
+                                + "' (" + ColliderKind(src) + ") could not be mirrored.");
+                            continue;
+                        }
+
+                        colliderCount++;
+                        var sphere = added.TryCast<SphereCollider>();
+                        if (sphere != null)
+                        {
+                            _ballRadius = Mathf.Max(_ballRadius, sphere.radius);
+                            sphere.contactOffset = 0.0001f;
+                        }
+                    }
                 }
 
                 if (colliderCount == 0)
@@ -367,8 +402,7 @@ namespace GwyfAimbotMod
                 }
 
                 Plugin.Logger.LogInfo(
-                    "Shadow world: ball mirrored with " + colliderCount + " collider(s) from "
-                    + srcCols.Length + " in the hierarchy, radius " + _ballRadius.ToString("F4")
+                    "Shadow world: ball mirrored with " + colliderCount + " collider(s), radius " + _ballRadius.ToString("F4")
                     + ", mass " + srcRb.mass.ToString("F3")
                     + ", ccd " + srcRb.collisionDetectionMode
                     + ", drag " + srcRb.drag.ToString("F3") + "/" + srcRb.angularDrag.ToString("F3") + " (at rest).");
@@ -389,8 +423,6 @@ namespace GwyfAimbotMod
                 rb.constraints = srcRb.constraints;
                 rb.detectCollisions = srcRb.detectCollisions;
                 rb.freezeRotation = srcRb.freezeRotation;
-                // Interpolation is render-time smoothing only; it must be off so recorded
-                // positions are the raw solver output.
                 rb.interpolation = RigidbodyInterpolation.None;
 
                 rb.centerOfMass = srcRb.centerOfMass;
@@ -407,6 +439,27 @@ namespace GwyfAimbotMod
             }
         }
 
+        private static bool ShouldIgnoreCollider(Collider src)
+        {
+            if (src == null) return true;
+
+            // Ignore other player balls
+            if (src.GetComponentInParent<BallMovement>() != null) return true;
+
+            string path = HierarchyPath(src.transform).ToLowerInvariant();
+            string name = src.name.ToLowerInvariant();
+
+            // Detectors around holes, triggers, zones, audio, spawns, cameras
+            if (path.Contains("detector") || name.Contains("detector")) return true;
+            if (path.Contains("checkpoint") || name.Contains("checkpoint")) return true;
+            if (path.Contains("spawn") || name.Contains("spawn")) return true;
+            if (path.Contains("audio") || path.Contains("sound") || path.Contains("music")) return true;
+            if (path.Contains("camera") || path.Contains("freecam") || path.Contains("flycam")) return true;
+            if (path.Contains("powerup") || name.Contains("powerup")) return true;
+
+            return false;
+        }
+
         private void MirrorColliders(float frameStart, float budgetMs)
         {
             while (_mirrorIndex < _sourceColliders.Length)
@@ -418,8 +471,12 @@ namespace GwyfAimbotMod
                 if (!src.enabled) { _skipDisabled++; SkippedColliders++; continue; }
                 if (!src.gameObject.activeInHierarchy) { _skipInactive++; SkippedColliders++; continue; }
 
-                // Anything carrying a non-kinematic body is another player's ball or a loose prop:
-                // it would need its own simulated state, so it is left out rather than frozen in place.
+                if (ShouldIgnoreCollider(src)) { _skipInactive++; SkippedColliders++; continue; }
+
+                // Non-hazard triggers don't collide physically; skip them to keep physics clean and fast
+                if (src.isTrigger && !IsHazardName(src)) { _skipDisabled++; SkippedColliders++; continue; }
+
+                // Anything carrying a non-kinematic body is another player's ball or a loose prop
                 var attached = src.attachedRigidbody;
                 if (attached != null && !attached.isKinematic) { _skipDynamicBody++; SkippedColliders++; continue; }
 

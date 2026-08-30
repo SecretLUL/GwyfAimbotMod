@@ -12,10 +12,11 @@ namespace GwyfAimbotMod
         private enum SearchState
         {
             Idle,
-            DirectEvaluation,
-            AngleSweep,
-            PowerScan,        // resumable power sweep for one direction, one trajectory per step
-            PowerRefinement,
+            DirectEvaluation,       // Pass 1: Dense power sweep across direct line and near angles
+            AngleSweep,             // Pass 2: Wide multi-power angular sweep
+            PowerScan,              // Resumable dense power sweep for one direction
+            CandidateRefinement,    // Pass 3: Micro-angle and targeted power search around promising flyby candidates
+            PowerRefinement,        // Pass 4: Sinking band centering (find [min, max] powers and pick center)
             Completed
         }
 
@@ -40,9 +41,17 @@ namespace GwyfAimbotMod
         private Vector3 _winningDirection;
         private float _winningMinDist;
 
-        // Angle sweep parameters
+        // Pass 1: Direct & Near Angles
+        private static readonly float[] DirectAngles = { 0f, 1.25f, -1.25f, 2.5f, -2.5f, 4.0f, -4.0f, 6.0f, -6.0f, 9.0f, -9.0f, 13.0f, -13.0f };
+        private int _directAngleIndex = 0;
+
+        // Pass 2: Angle sweep parameters
         private List<float> _candidateAngles = new List<float>();
         private int _currentAngleIndex = 0;
+
+        // Multi-power probing fractions during wide angle sweep (7 levels covering short putts to max power)
+        private static readonly float[] ProbePowerFractions = { 0.15f, 0.30f, 0.45f, 0.60f, 0.75f, 0.90f, 0.98f };
+        private int _currentProbeIndex = 0;
 
         // Candidate angles that passed near the hole during probe shots
         private struct CandidateAngle
@@ -51,16 +60,12 @@ namespace GwyfAimbotMod
             public float ClosestFlybyDist;
             public float ProbePower;
         }
-        private List<CandidateAngle> _promisingCandidates = new List<CandidateAngle>();
+        private readonly List<CandidateAngle> _promisingCandidates = new List<CandidateAngle>(32);
         private int _candidateRefineIndex = 0;
-
-        // Which of the two probe powers of the current angle is next. The sweep used to run both
-        // in one go, which put two full trajectories into a single frame.
-        private int _currentProbeIndex = 0;
+        private int _candidateRefineStep = 0;
+        private static readonly float[] RefineAngleOffsets = { 0f, -0.75f, 0.75f, -1.5f, 1.5f, -2.25f, 2.25f };
 
         // ---- resumable power scan ----
-        // A full power sweep is 13+ trajectories. Running it inside one frame cost over half a
-        // second at 200 Hz, so it is stepped one trajectory at a time like every other stage.
         private Vector3 _scanDir;
         private int _scanIndex;
         private int _scanCount;
@@ -71,23 +76,22 @@ namespace GwyfAimbotMod
         private float _scanBestP;
         private SearchState _scanReturnTo;
 
-        // Second phase: centre the solution inside the band of powers that sink, so the player
-        // gets tolerance on the power bar instead of a knife edge.
-        private bool _scanRefining;
+        // Pass 4: Sweet-spot centering for power bar tolerance
         private int _scanRefineIndex;
         private float _scanSinkMin;
         private float _scanSinkMax;
         private Vector3[] _scanSinkPath;
-        private static readonly float[] ScanRefineOffsets = { -0.5f, -0.25f, 0.25f, 0.5f };
+        private static readonly float[] ScanRefineOffsets = { -0.5f, -0.25f, 0.25f, 0.5f, -0.75f, 0.75f, -1.0f, 1.0f };
 
         private Vector3 _lastSearchBallPos = Vector3.negativeInfinity;
+        private Vector3 _dirToHole = Vector3.forward;
 
         // ---- internal 1:1 simulation ----
         private ShadowPhysicsWorld _shadow;
         private ShadowTrajectorySimulator _shadowSim;
         private ShotTraceRecorder _recorder;
 
-        // Simulation context, refreshed once per search instead of per candidate shot.
+        // Simulation context
         private bool _simContextReady;
         private bool _simUseShadow;
         private BallTuning _simTuning;
@@ -96,13 +100,18 @@ namespace GwyfAimbotMod
         private float _simAngDrag;
         private PhysicMaterial _simBallMat;
 
-        // Last non-zero pull force seen; the force is already back to 0 by the time the ball moves.
+        // Last non-zero pull force seen
         private float _lastPullForce;
 
         private bool _loggedEnvironment;
         private BallMovement _loggedBall;
         private int _loggedHole = int.MinValue;
         private int _loggedCupHole = int.MinValue;
+
+        // Live-aim throttle
+        private float _lastLiveAimTime = -1f;
+        private float _lastLiveAimForce = -1f;
+        private Vector3 _lastLiveAimDir = Vector3.zero;
 
         void Start()
         {
@@ -137,12 +146,11 @@ namespace GwyfAimbotMod
         private void InitializeSweepAngles()
         {
             _candidateAngles.Clear();
-            _candidateAngles.Add(0f); // Direct towards hole
+            _candidateAngles.Add(0f);
 
             float step = Mathf.Max(0.5f, Plugin.AngleStepDegrees.Value);
             float span = Mathf.Clamp(Plugin.AngleSpanDegrees.Value, step, 180f);
 
-            // Scan outward symmetrically so the cheapest, most direct angles are tried first.
             for (float a = step; a <= span; a += step)
             {
                 _candidateAngles.Add(a);
@@ -152,8 +160,6 @@ namespace GwyfAimbotMod
 
         void Update()
         {
-            // Vor dem Zielabgleich, damit der Dump auch dann laeuft, wenn Ball oder Loch
-            // noch nicht gefunden sind - PhysicsParameterDump sucht sich den Ball selbst.
             if (Plugin.DumpKey != null && Input.GetKeyDown(Plugin.DumpKey.Value))
             {
                 PhysicsParameterDump.Run(_targetBall);
@@ -174,8 +180,6 @@ namespace GwyfAimbotMod
                 return;
             }
 
-            // Full ball state once per ball and once per hole: everything a later trace has to be
-            // read against, without needing the F9 dump to have been pressed.
             int holeNow = (int)_targetBall.HoleNumber;
             if (_loggedBall != _targetBall || _loggedHole != holeNow)
             {
@@ -185,15 +189,11 @@ namespace GwyfAimbotMod
                 DiagnosticsLog.WriteBall(_targetBall);
             }
 
-            // Keep the mirrored hole in sync. Costs a slice of one frame per hole, not per shot.
             if (Plugin.UseShadowPhysics.Value)
             {
                 _shadow.EnsureBuilt(_targetBall, (int)_targetBall.HoleNumber, Plugin.BuildBudgetMs.Value);
             }
 
-            // The shadow world usually finishes building after a search has already started with
-            // the fallback engine. Paths from the two engines are not comparable, so switch the
-            // engine only here and restart the search when it changes.
             bool shadowReady = Plugin.UseShadowPhysics.Value && _shadow != null && _shadow.IsReady;
             if (!_simContextReady || shadowReady != _simUseShadow)
             {
@@ -202,9 +202,6 @@ namespace GwyfAimbotMod
                 _hasSolution = false;
                 _lastSearchBallPos = Vector3.negativeInfinity;
 
-                // Once the mirror exists, record what geometry actually surrounds the cup. If the
-                // hole is a real opening in the mesh the ball should drop in on its own; if nothing
-                // is mirrored there, sinking can only ever come from the radius heuristic.
                 if (shadowReady && _loggedCupHole != _loggedHole)
                 {
                     _loggedCupHole = _loggedHole;
@@ -220,8 +217,6 @@ namespace GwyfAimbotMod
             float pull = GetCurrentPullForce();
             if (pull > 0.01f) _lastPullForce = pull;
 
-            // Comparison of the last real shot against its prediction. Deliberately outside
-            // FixedUpdate: a physics scene must not be stepped from inside the physics loop.
             if (Plugin.TraceEnabled.Value)
             {
                 _recorder.Flush(
@@ -265,20 +260,93 @@ namespace GwyfAimbotMod
                 UpdateLiveAimTrajectory();
             }
 
-            // Auto-aim assist (hold the configured key)
-            if (_hasSolution && Input.GetKey(Plugin.AutoAimKey.Value) && Camera.main != null && _winningDirection.sqrMagnitude > 0.01f)
+            // Auto-aim assist & Perfect execution (hold or press the configured key)
+            if (_hasSolution && Input.GetKey(Plugin.AutoAimKey.Value) && _winningDirection.sqrMagnitude > 0.001f)
             {
-                Vector3 lookDir = new Vector3(_winningDirection.x, 0, _winningDirection.z).normalized;
+                Vector3 lookDir = new Vector3(_winningDirection.x, 0f, _winningDirection.z).normalized;
                 if (lookDir.sqrMagnitude > 0.001f)
                 {
-                    Quaternion targetRot = Quaternion.LookRotation(lookDir, Vector3.up);
-                    Camera.main.transform.rotation = Quaternion.Slerp(Camera.main.transform.rotation, targetRot, Time.deltaTime * 12f);
+                    float targetYaw = Mathf.Atan2(lookDir.x, lookDir.z) * Mathf.Rad2Deg;
+
+                    var mouseAim = FindObjectOfType<MouseAim>();
+                    float currentPitch = 20f;
+                    if (mouseAim != null && mouseAim.m_trans != null)
+                    {
+                        currentPitch = mouseAim.m_trans.eulerAngles.x;
+                    }
+                    else if (Camera.main != null)
+                    {
+                        currentPitch = Camera.main.transform.eulerAngles.x;
+                    }
+
+                    Quaternion targetRot = Quaternion.Euler(currentPitch, targetYaw, 0f);
+
+                    // 1. Properly orient MouseAim (GWYF's camera controller)
+                    if (mouseAim != null)
+                    {
+                        if (mouseAim.m_trans != null)
+                        {
+                            if (Plugin.AutoAimSnap.Value)
+                            {
+                                mouseAim.m_trans.rotation = targetRot;
+                            }
+                            else
+                            {
+                                mouseAim.m_trans.rotation = Quaternion.Slerp(mouseAim.m_trans.rotation, targetRot, Time.deltaTime * 35f);
+                            }
+                        }
+                        mouseAim.ResetRotation(new Vector3(currentPitch, targetYaw, 0f), 0f);
+                    }
+
+                    // 2. Orient Camera.main
+                    if (Camera.main != null)
+                    {
+                        if (Plugin.AutoAimSnap.Value)
+                        {
+                            Camera.main.transform.rotation = targetRot;
+                        }
+                        else
+                        {
+                            Camera.main.transform.rotation = Quaternion.Slerp(Camera.main.transform.rotation, targetRot, Time.deltaTime * 35f);
+                        }
+                    }
+
+                    // 3. Set the exact required winning power into the power bar data
+                    if (_worldPowerBar != null && _worldPowerBar.m_forceData != null)
+                    {
+                        _worldPowerBar.m_forceData.SetValue(_winningPower);
+                    }
+                    if (_soFiller != null && _soFiller.m_hitForce != null)
+                    {
+                        _soFiller.m_hitForce.SetValue(_winningPower);
+                    }
+
+                    // 4. If AutoShoot is enabled, execute shot cleanly on key down
+                    if (Plugin.AutoAimAutoShoot.Value && Input.GetKeyDown(Plugin.AutoAimKey.Value))
+                    {
+                        ExecuteShot();
+                    }
                 }
             }
         }
 
-        // The session log has to survive the user simply closing the game, so it is flushed on
-        // every shutdown path Unity offers rather than only on a timer.
+        [HideFromIl2Cpp]
+        private void ExecuteShot()
+        {
+            if (_targetBall == null || !_hasSolution) return;
+
+            if (_worldPowerBar != null && _worldPowerBar.m_forceData != null)
+            {
+                _worldPowerBar.m_forceData.SetValue(_winningPower);
+            }
+            if (_soFiller != null && _soFiller.m_hitForce != null)
+            {
+                _soFiller.m_hitForce.SetValue(_winningPower);
+            }
+
+            _targetBall.CheckForBallHit();
+        }
+
         void OnApplicationQuit()
         {
             DiagnosticsLog.Line("session", "application quit");
@@ -292,8 +360,6 @@ namespace GwyfAimbotMod
 
         void FixedUpdate()
         {
-            // One sample per physics step, so the recorded path lines up index-for-index with a
-            // simulation stepped at the same fixedDeltaTime.
             if (!Plugin.TraceEnabled.Value || _targetBall == null) return;
             _recorder.Sample(_targetBall, _lastPullForce, GetMaxPower());
         }
@@ -304,10 +370,11 @@ namespace GwyfAimbotMod
             _searchState = SearchState.DirectEvaluation;
             _hasSolution = false;
             _isHoleInOne = false;
+            _directAngleIndex = 0;
             _currentAngleIndex = 0;
             _currentProbeIndex = 0;
             _candidateRefineIndex = 0;
-            _scanRefining = false;
+            _candidateRefineStep = 0;
             _scanIndex = 0;
             _scanCount = 0;
             _scanBestPath = null;
@@ -322,10 +389,6 @@ namespace GwyfAimbotMod
             PrepareSimulationContext();
         }
 
-        /// <summary>
-        /// Picks the simulation engine and caches everything it needs, so the per-candidate loop
-        /// never touches IL2CPP fields.
-        /// </summary>
         [HideFromIl2Cpp]
         private void PrepareSimulationContext()
         {
@@ -344,11 +407,6 @@ namespace GwyfAimbotMod
             _simBallMat = col != null ? col.sharedMaterial : null;
         }
 
-        /// <summary>
-        /// Runs one candidate shot through whichever engine is active. The shadow engine replays the
-        /// game's own solver against the mirrored hole; the legacy engine is the approximate
-        /// integrator, used only while the shadow world is unavailable.
-        /// </summary>
         [HideFromIl2Cpp]
         private SimulationResult RunSimulation(Vector3 startPos, Vector3 velocity, Vector3 holePos, float simSeconds, int pointStride)
         {
@@ -370,7 +428,6 @@ namespace GwyfAimbotMod
                     pointStride);
             }
 
-            // The legacy integrator runs its own fixed 0.016 s step.
             int maxSteps = Mathf.Clamp(Mathf.CeilToInt(simSeconds / 0.016f), 50, 2000);
             return TrajectorySimulator.SimulateShotDetailed(
                 startPos, velocity, holePos, _simBallRadius, _simDrag, _simAngDrag, _simBallMat, maxSteps, pointStride);
@@ -502,7 +559,6 @@ namespace GwyfAimbotMod
         [HideFromIl2Cpp]
         private float CalculateBallSpeed(float force, float maxPower)
         {
-            // Measured, not guessed: k comes from the launch velocity of real shots.
             return ShotCalibration.SpeedForForce(_targetBall, force, maxPower);
         }
 
@@ -524,8 +580,6 @@ namespace GwyfAimbotMod
                 aimDir.Normalize();
                 if (aimDir.sqrMagnitude < 0.001f) aimDir = Vector3.forward;
 
-                // Only recompute when the shot actually changed, or after the throttle interval.
-                // In between, the previously drawn line stays on screen.
                 float forceStep = Mathf.Max(1f, maxPower * 0.01f);
                 bool changed = Mathf.Abs(currentForce - _lastLiveAimForce) > forceStep
                                || Vector3.Angle(aimDir, _lastLiveAimDir) > 0.75f;
@@ -540,8 +594,6 @@ namespace GwyfAimbotMod
                 float speed = CalculateBallSpeed(currentForce, maxPower);
                 Vector3 initVelocity = aimDir * speed;
 
-                // The legacy integrator sweeps the live scene, so the real ball's own collider has
-                // to be taken out of the query. The shadow scene does not contain it at all.
                 var col = _simUseShadow ? null : _targetBall.GetComponent<Collider>();
                 bool oldEnabled = true;
                 if (col != null)
@@ -602,7 +654,6 @@ namespace GwyfAimbotMod
             if (dirToHole.sqrMagnitude < 0.001f) dirToHole = Vector3.forward;
             _dirToHole = dirToHole;
 
-            // Only the legacy integrator needs the real ball hidden from its sweeps.
             var ballCol = _simUseShadow ? null : _targetBall.GetComponent<Collider>();
             bool oldEnabled = true;
             if (ballCol != null)
@@ -615,21 +666,29 @@ namespace GwyfAimbotMod
 
             try
             {
-                // One trajectory per iteration, budget checked BEFORE each. A single trajectory at
-                // 200 Hz costs more than a 60 Hz frame, so the loop can only ever overrun by one -
-                // it used to run a whole 13-trajectory power sweep before looking at the clock.
                 while (true)
                 {
                     if ((Time.realtimeSinceStartup - startTime) * 1000f >= maxMs) return;
 
-                    // STAGE 1: direct line to the hole
+                    // STAGE 1: Direct line & near angles
                     if (_searchState == SearchState.DirectEvaluation)
                     {
-                        BeginPowerScan(dirToHole, maxPower, SearchState.AngleSweep);
+                        if (_directAngleIndex >= DirectAngles.Length)
+                        {
+                            _searchState = SearchState.AngleSweep;
+                            _currentAngleIndex = 0;
+                            _currentProbeIndex = 0;
+                            continue;
+                        }
+
+                        float angle = DirectAngles[_directAngleIndex];
+                        _directAngleIndex++;
+                        Vector3 testDir = Quaternion.Euler(0, angle, 0) * _dirToHole;
+                        BeginPowerScan(testDir, maxPower, SearchState.DirectEvaluation);
                         continue;
                     }
 
-                    // STAGE 2: geometry sweep, probing each angle with two representative powers
+                    // STAGE 2: Wide Angle Sweep with multi-power probing
                     if (_searchState == SearchState.AngleSweep)
                     {
                         if (_currentAngleIndex >= _candidateAngles.Count)
@@ -637,8 +696,9 @@ namespace GwyfAimbotMod
                             if (_promisingCandidates.Count > 0)
                             {
                                 _promisingCandidates.Sort((a, b) => a.ClosestFlybyDist.CompareTo(b.ClosestFlybyDist));
-                                _searchState = SearchState.PowerRefinement;
+                                _searchState = SearchState.CandidateRefinement;
                                 _candidateRefineIndex = 0;
+                                _candidateRefineStep = 0;
                             }
                             else
                             {
@@ -652,25 +712,45 @@ namespace GwyfAimbotMod
                         continue;
                     }
 
-                    // STAGE 3: resumable power sweep for one direction
+                    // STAGE 3: Resumable power sweep
                     if (_searchState == SearchState.PowerScan)
                     {
                         if (StepPowerScan(ballPos, holePos, maxPower)) return;
                         continue;
                     }
 
-                    // STAGE 4: refine the angles that flew close
-                    if (_searchState == SearchState.PowerRefinement)
+                    // STAGE 4: Candidate Refinement (bounce bank candidates)
+                    if (_searchState == SearchState.CandidateRefinement)
                     {
-                        if (_candidateRefineIndex >= _promisingCandidates.Count)
+                        if (_candidateRefineIndex >= _promisingCandidates.Count || _candidateRefineIndex >= 12)
                         {
                             CompleteSearchWithBestPath();
                             return;
                         }
 
                         CandidateAngle candidate = _promisingCandidates[_candidateRefineIndex];
-                        Vector3 candidateDir = Quaternion.Euler(0, candidate.AngleOffset, 0) * dirToHole;
-                        BeginPowerScan(candidateDir, maxPower, SearchState.PowerRefinement);
+                        if (_candidateRefineStep >= RefineAngleOffsets.Length)
+                        {
+                            _candidateRefineIndex++;
+                            _candidateRefineStep = 0;
+                            continue;
+                        }
+
+                        float subAngle = candidate.AngleOffset + RefineAngleOffsets[_candidateRefineStep];
+                        _candidateRefineStep++;
+                        Vector3 candidateDir = Quaternion.Euler(0, subAngle, 0) * _dirToHole;
+
+                        // Targeted power scan around the candidate probe power
+                        float lowP = Mathf.Max(maxPower * 0.06f, candidate.ProbePower - maxPower * 0.22f);
+                        float highP = Mathf.Min(maxPower * 0.98f, candidate.ProbePower + maxPower * 0.22f);
+                        BeginPowerScanCustomRange(candidateDir, maxPower, lowP, highP, 14, SearchState.CandidateRefinement);
+                        continue;
+                    }
+
+                    // STAGE 5: Power Refinement
+                    if (_searchState == SearchState.PowerRefinement)
+                    {
+                        if (StepPowerRefinement(ballPos, holePos, maxPower)) return;
                         continue;
                     }
 
@@ -686,32 +766,26 @@ namespace GwyfAimbotMod
             }
         }
 
-        /// <summary>
-        /// Runs one probe trajectory of the angle sweep. Returns true when a solution was found and
-        /// the search is finished.
-        /// </summary>
         [HideFromIl2Cpp]
         private bool StepAngleSweep(Vector3 ballPos, Vector3 holePos, float maxPower)
         {
             float angle = _candidateAngles[_currentAngleIndex];
             Vector3 testDir = Quaternion.Euler(0, angle, 0) * _dirToHole;
 
-            float probeP = _currentProbeIndex == 0 ? maxPower * 0.45f : maxPower * 0.75f;
+            float probeFrac = ProbePowerFractions[_currentProbeIndex];
+            float probeP = maxPower * probeFrac;
             float speed = CalculateBallSpeed(probeP, maxPower);
             var probeResult = RunSimulation(ballPos, testDir * speed, holePos, Plugin.ProbeSimSeconds.Value, 1);
 
-            bool advanceAngle = true;
-
             if (probeResult.Sunk)
             {
-                ApplyWinningPath(probeResult.Path, probeP, testDir, 0f, true);
+                BeginPowerRefinement(testDir, probeP, maxPower, probeResult.Path);
                 return true;
             }
 
-            // A shot that ends in water is not a fallback worth recommending.
             if (!probeResult.HitHazard)
             {
-                if (probeResult.MinDistanceToHole < 1.4f)
+                if (probeResult.MinDistanceToHole < 3.5f)
                 {
                     _promisingCandidates.Add(new CandidateAngle
                     {
@@ -719,25 +793,20 @@ namespace GwyfAimbotMod
                         ClosestFlybyDist = probeResult.MinDistanceToHole,
                         ProbePower = probeP
                     });
-                    // Close enough to be worth a full power sweep later; the second probe adds nothing.
-                    _currentProbeIndex = 0;
-                    _currentAngleIndex++;
-                    return false;
                 }
 
-                if (probeResult.FinalDistanceToHole < _winningMinDist && probeP >= maxPower * 0.15f)
+                if (probeResult.FinalDistanceToHole < _winningMinDist && probeP >= maxPower * 0.10f)
                 {
                     _winningMinDist = probeResult.FinalDistanceToHole;
                     _winningPath = probeResult.Path;
                     _winningPower = probeP;
                     _winningDirection = testDir;
+                    UpdateSolutionVisuals();
                 }
             }
 
             _currentProbeIndex++;
-            if (_currentProbeIndex < 2) advanceAngle = false;
-
-            if (advanceAngle)
+            if (_currentProbeIndex >= ProbePowerFractions.Length)
             {
                 _currentProbeIndex = 0;
                 _currentAngleIndex++;
@@ -745,23 +814,18 @@ namespace GwyfAimbotMod
             return false;
         }
 
-        // Cached so the sweep helpers do not each recompute it.
-        private Vector3 _dirToHole = Vector3.forward;
-
-        // Live-aim throttle. Recomputing the preview every frame while charging costs a full
-        // trajectory per frame, which alone is enough to halve the framerate at 200 Hz.
-        private float _lastLiveAimTime = -1f;
-        private float _lastLiveAimForce = -1f;
-        private Vector3 _lastLiveAimDir = Vector3.zero;
-
-        /// <summary>Starts a resumable power sweep along <paramref name="dir"/>.</summary>
         [HideFromIl2Cpp]
         private void BeginPowerScan(Vector3 dir, float maxPower, SearchState returnTo)
         {
-            float lowP = maxPower * 0.08f;
+            float lowP = maxPower * 0.06f;
             float highP = maxPower * 0.98f;
-            int subdivisions = Mathf.Max(4, Plugin.PowerSubdivisions.Value);
+            int subdivisions = Mathf.Max(6, Plugin.PowerSubdivisions.Value);
+            BeginPowerScanCustomRange(dir, maxPower, lowP, highP, subdivisions, returnTo);
+        }
 
+        [HideFromIl2Cpp]
+        private void BeginPowerScanCustomRange(Vector3 dir, float maxPower, float lowP, float highP, int subdivisions, SearchState returnTo)
+        {
             _scanDir = dir;
             _scanLow = lowP;
             _scanStep = (highP - lowP) / subdivisions;
@@ -770,69 +834,27 @@ namespace GwyfAimbotMod
             _scanBestDist = float.MaxValue;
             _scanBestPath = null;
             _scanBestP = 0f;
-            _scanRefining = false;
-            _scanRefineIndex = 0;
-            _scanSinkPath = null;
             _scanReturnTo = returnTo;
             _searchState = SearchState.PowerScan;
         }
 
-        /// <summary>
-        /// Runs exactly one trajectory of the power sweep. Returns true when the search is finished.
-        /// </summary>
         [HideFromIl2Cpp]
         private bool StepPowerScan(Vector3 ballPos, Vector3 holePos, float maxPower)
         {
             float simSeconds = Plugin.MaxSimSeconds.Value;
 
-            if (_scanRefining)
-            {
-                // Widen the known sinking band so the recommended power sits in its middle.
-                if (_scanRefineIndex < ScanRefineOffsets.Length)
-                {
-                    float fp = Mathf.Clamp(
-                        _scanSinkMin + ScanRefineOffsets[_scanRefineIndex] * _scanStep,
-                        _scanLow,
-                        _scanLow + (_scanCount - 1) * _scanStep);
-                    _scanRefineIndex++;
-
-                    var fr = RunSimulation(ballPos, _scanDir * CalculateBallSpeed(fp, maxPower), holePos, simSeconds, 1);
-                    if (fr.Sunk)
-                    {
-                        if (fp < _scanSinkMin) _scanSinkMin = fp;
-                        if (fp > _scanSinkMax) _scanSinkMax = fp;
-                        _scanSinkPath = fr.Path;
-                    }
-                    return false;
-                }
-
-                float winningPower = (_scanSinkMin + _scanSinkMax) * 0.5f;
-                ApplyWinningPath(_scanSinkPath, winningPower, _scanDir, 0f, true);
-                return true;
-            }
-
             if (_scanIndex >= _scanCount)
             {
-                // Sweep exhausted without a sink: keep the best approach and resume the caller.
                 if (_scanBestDist < _winningMinDist && _scanBestPath != null)
                 {
                     _winningMinDist = _scanBestDist;
                     _winningPath = _scanBestPath;
                     _winningPower = _scanBestP;
                     _winningDirection = _scanDir;
+                    UpdateSolutionVisuals();
                 }
 
-                if (_scanReturnTo == SearchState.AngleSweep)
-                {
-                    _searchState = SearchState.AngleSweep;
-                    _currentAngleIndex = 0;
-                    _currentProbeIndex = 0;
-                }
-                else
-                {
-                    _candidateRefineIndex++;
-                    _searchState = SearchState.PowerRefinement;
-                }
+                _searchState = _scanReturnTo;
                 return false;
             }
 
@@ -843,17 +865,13 @@ namespace GwyfAimbotMod
 
             if (result.Sunk)
             {
-                _scanRefining = true;
-                _scanRefineIndex = 0;
-                _scanSinkMin = testP;
-                _scanSinkMax = testP;
-                _scanSinkPath = result.Path;
-                return false;
+                BeginPowerRefinement(_scanDir, testP, maxPower, result.Path);
+                return true;
             }
 
             if (!result.HitHazard
                 && result.FinalDistanceToHole < _scanBestDist
-                && testP >= maxPower * 0.12f)
+                && testP >= maxPower * 0.10f)
             {
                 _scanBestDist = result.FinalDistanceToHole;
                 _scanBestPath = result.Path;
@@ -861,6 +879,49 @@ namespace GwyfAimbotMod
             }
 
             return false;
+        }
+
+        [HideFromIl2Cpp]
+        private void BeginPowerRefinement(Vector3 dir, float sinkPower, float maxPower, Vector3[] initialPath)
+        {
+            _scanDir = dir;
+            _scanSinkMin = sinkPower;
+            _scanSinkMax = sinkPower;
+            _scanSinkPath = initialPath;
+            _scanRefineIndex = 0;
+            _searchState = SearchState.PowerRefinement;
+
+            // Apply preliminary solution immediately so user sees it right away
+            ApplyWinningPath(initialPath, sinkPower, dir, 0f, true);
+        }
+
+        [HideFromIl2Cpp]
+        private bool StepPowerRefinement(Vector3 ballPos, Vector3 holePos, float maxPower)
+        {
+            float simSeconds = Plugin.MaxSimSeconds.Value;
+            float stepSize = maxPower * 0.025f;
+
+            if (_scanRefineIndex < ScanRefineOffsets.Length)
+            {
+                float fp = Mathf.Clamp(
+                    _scanSinkMin + ScanRefineOffsets[_scanRefineIndex] * stepSize,
+                    maxPower * 0.05f,
+                    maxPower * 0.99f);
+                _scanRefineIndex++;
+
+                var fr = RunSimulation(ballPos, _scanDir * CalculateBallSpeed(fp, maxPower), holePos, simSeconds, 1);
+                if (fr.Sunk)
+                {
+                    if (fp < _scanSinkMin) _scanSinkMin = fp;
+                    if (fp > _scanSinkMax) _scanSinkMax = fp;
+                    _scanSinkPath = fr.Path;
+                }
+                return false;
+            }
+
+            float winningPower = (_scanSinkMin + _scanSinkMax) * 0.5f;
+            ApplyWinningPath(_scanSinkPath, winningPower, _scanDir, 0f, true);
+            return true;
         }
 
         [HideFromIl2Cpp]
@@ -993,7 +1054,6 @@ namespace GwyfAimbotMod
             return 0f;
         }
 
-        /// <summary>Status line describing which engine is running and how well it matches.</summary>
         [HideFromIl2Cpp]
         private string BuildEngineStatus()
         {
@@ -1056,33 +1116,31 @@ namespace GwyfAimbotMod
             {
                 GUI.color = Color.yellow;
 
-                // The power scan runs on behalf of whichever stage started it, so its progress is
-                // reported inside that stage's band rather than as a state of its own.
-                SearchState shown = _searchState == SearchState.PowerScan ? _scanReturnTo : _searchState;
-                float scanFraction = _scanCount > 0 ? Mathf.Clamp01((float)_scanIndex / _scanCount) : 0f;
-
-                float progress;
-                if (shown == SearchState.AngleSweep && _candidateAngles.Count > 0)
+                float progress = 0f;
+                if (_searchState == SearchState.DirectEvaluation)
                 {
-                    if (_searchState == SearchState.PowerScan)
-                    {
-                        // The direct-line scan that runs before the sweep starts.
-                        progress = 2f + scanFraction * 8f;
-                    }
-                    else
-                    {
-                        float perAngle = (_currentAngleIndex + _currentProbeIndex * 0.5f) / _candidateAngles.Count;
-                        progress = 10f + perAngle * 60f;
-                    }
+                    float frac = DirectAngles.Length > 0 ? (float)_directAngleIndex / DirectAngles.Length : 0f;
+                    progress = frac * 20f;
                 }
-                else if (shown == SearchState.PowerRefinement && _promisingCandidates.Count > 0)
+                else if (_searchState == SearchState.AngleSweep)
                 {
-                    float perCandidate = (_candidateRefineIndex + scanFraction) / _promisingCandidates.Count;
-                    progress = 70f + Mathf.Clamp01(perCandidate) * 30f;
+                    float frac = _candidateAngles.Count > 0 ? ((float)_currentAngleIndex + (float)_currentProbeIndex / ProbePowerFractions.Length) / _candidateAngles.Count : 0f;
+                    progress = 20f + frac * 50f;
                 }
-                else
+                else if (_searchState == SearchState.CandidateRefinement)
                 {
-                    progress = 2f + scanFraction * 8f;
+                    float totalCand = Mathf.Min(12, Mathf.Max(1, _promisingCandidates.Count));
+                    float frac = ((float)_candidateRefineIndex + (float)_candidateRefineStep / RefineAngleOffsets.Length) / totalCand;
+                    progress = 70f + Mathf.Clamp01(frac) * 25f;
+                }
+                else if (_searchState == SearchState.PowerRefinement)
+                {
+                    progress = 95f + Mathf.Clamp01((float)_scanRefineIndex / ScanRefineOffsets.Length) * 5f;
+                }
+                else if (_searchState == SearchState.PowerScan)
+                {
+                    float scanFrac = _scanCount > 0 ? (float)_scanIndex / _scanCount : 0f;
+                    progress = Mathf.Clamp(scanFrac * 100f, 5f, 95f);
                 }
 
                 GUI.Label(new Rect(20, 18, boxWidth - 20, 30), $"Aimbot: Suche Hole-in-One Trajektorien... ({progress:F0}%)", headerStyle);
@@ -1094,9 +1152,6 @@ namespace GwyfAimbotMod
             }
             else if (_hasSolution && _isHoleInOne)
             {
-                // A hole-in-one is only as trustworthy as the last measured deviation. Claiming
-                // certainty while the prediction is known to drift metres is what made the mod
-                // promise shots it could not deliver.
                 bool trustworthy = !_recorder.HasResult || _recorder.MaxDeviation < 0.25f;
 
                 GUI.color = trustworthy ? new Color(0.1f, 1f, 0.4f) : new Color(1f, 0.75f, 0.1f);

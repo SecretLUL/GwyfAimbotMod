@@ -16,6 +16,8 @@ namespace GwyfAimbotMod
 
         internal static ConfigEntry<KeyCode> DumpKey;
         internal static ConfigEntry<KeyCode> AutoAimKey;
+        internal static ConfigEntry<bool> AutoAimAutoShoot;
+        internal static ConfigEntry<bool> AutoAimSnap;
 
         // ---- Simulation ----
         internal static ConfigEntry<bool> UseShadowPhysics;
@@ -60,7 +62,19 @@ namespace GwyfAimbotMod
                 "Keys",
                 "AutoAimKey",
                 KeyCode.F,
-                "Taste, die die Kamera weich auf die gefundene Loesung dreht (halten).");
+                "Taste, die die Kamera perfekt auf die gefundene Loesung ausrichtet und die Kraft einstellt (halten).");
+
+            AutoAimAutoShoot = Config.Bind(
+                "Keys",
+                "AutoAimAutoShoot",
+                false,
+                "Wenn true, wird beim Druecken der AutoAim-Taste nach dem perfekten Ausrichten und Kraftladen der Schlag sofort automatisch getriggert.");
+
+            AutoAimSnap = Config.Bind(
+                "Keys",
+                "AutoAimSnap",
+                true,
+                "Wenn true, rastet die Kamera sofort 100% praezise auf den Zielwinkel ein. Bei false dreht sie weich.");
 
             UseShadowPhysics = Config.Bind(
                 "Simulation",
@@ -101,9 +115,8 @@ namespace GwyfAimbotMod
             ProbeSimSeconds = Config.Bind(
                 "Simulation",
                 "ProbeSimSeconds",
-                3.5f,
-                "Simulierte Zeit fuer die Probeschuesse des Winkelsweeps. Kuerzer als MaxSimSeconds, "
-                + "weil hier nur entschieden wird, ob ein Winkel ueberhaupt am Loch vorbeikommt.");
+                6.0f,
+                "Simulierte Zeit fuer die Probeschuesse des Winkelsweeps.");
 
             LiveAimSimSeconds = Config.Bind(
                 "Simulation",
@@ -128,28 +141,26 @@ namespace GwyfAimbotMod
             SearchBudgetMs = Config.Bind(
                 "Simulation",
                 "SearchBudgetMs",
-                2.5f,
+                3.5f,
                 "Zeitbudget pro Frame fuer die Loesungssuche.");
 
             AngleStepDegrees = Config.Bind(
                 "Search",
                 "AngleStepDegrees",
-                7.5f,
-                "Schrittweite des Winkelsweeps. Eine Trajektorie kostet bei 200 Hz rund 35 ms, "
-                + "die Anzahl der Winkel bestimmt also direkt die Suchdauer.");
+                4.0f,
+                "Schrittweite des Winkelsweeps in Grad.");
 
             AngleSpanDegrees = Config.Bind(
                 "Search",
                 "AngleSpanDegrees",
-                90f,
-                "Maximaler Winkelversatz zur Richtung zum Loch, in beide Richtungen. 180 sucht "
-                + "auch Schuesse nach hinten, kostet aber die vierfache Zeit.");
+                110f,
+                "Maximaler Winkelversatz zur Richtung zum Loch in beide Richtungen.");
 
             PowerSubdivisions = Config.Bind(
                 "Search",
                 "PowerSubdivisions",
-                12,
-                "Stuetzstellen der Staerkesuche pro Winkel.");
+                16,
+                "Stuetzstellen der Staerkesuche pro Richtung.");
 
             // Bewusst ein neuer Schluessel: der alte "SpeedPerCurveUnit" war ein absoluter
             // m/s-Faktor (~52). Hier steht jetzt ein dimensionsloser Restfehler auf
