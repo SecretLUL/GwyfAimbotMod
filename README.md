@@ -1,95 +1,92 @@
-# GWYF Trajektorien-Vorhersage
+# GWYF Trajectory Prediction
 
-BepInEx-6-Plugin (IL2CPP) für *Golf With Your Friends*, das die Flugbahn des Balls
-vorausberechnet und den Schussraum nach Hole-in-One-Lösungen durchsucht.
+BepInEx 6 plugin (IL2CPP) for *Golf With Your Friends* that predicts the ball's trajectory
+and searches the shot parameter space for hole-in-one solutions.
 
-Akademisches Proof-of-Concept: Gegenstand ist die Frage, wie genau sich die
-Starrkörpersimulation eines laufenden Unity/PhysX-Spiels von außen reproduzieren lässt.
+Academic proof-of-concept: Investigating how accurately the rigid-body simulation of a running
+Unity/PhysX game can be reproduced externally.
 
-## Funktionsumfang
+## Features
 
-- **Live-Trajektorie** – zeichnet die vorhergesagte Bahn für die aktuelle Zielrichtung
-  und Zugstärke, während der Schlag aufgezogen wird.
-- **Lösungssuche** – durchsucht Winkel- und Stärkeraum nach einer Bahn, die im Loch endet;
-  fällt sonst auf den besten Annäherungsschlag zurück.
-- **Stärkeanzeige** – blendet die benötigte Zugstärke am Power-Bar ein.
-- **Auto-Aim-Assist** – dreht auf gehaltenem `[F]` die Kamera auf die gefundene Lösung.
-- **Parameter-Dump** – schreibt auf `[F9]` die gemessenen Physik-Parameter des laufenden
-  Spiels ins Log und als JSON (siehe unten).
+- **Live Trajectory** – Draws the predicted trajectory for the current aiming direction
+  and shot power as the shot is being charged.
+- **Solution Search** – Searches angle and power space for a trajectory that lands in the hole;
+  otherwise falls back to the best approach shot.
+- **Power Indicator** – Displays the required shot power on the power bar.
+- **Auto-Aim Assist** – Holding `[F]` smoothly rotates the camera toward the found solution.
+- **Parameter Dump** – Pressing `[F9]` logs the measured in-game physics parameters and exports
+  them as JSON (see below).
 
-> Gedacht für Einzelspieler- und private Sitzungen.
+> Intended for singleplayer and private sessions.
 
-## Voraussetzungen
+## Prerequisites
 
-| Komponente | Version |
+| Component | Version |
 |---|---|
 | Golf With Your Friends | Unity 2021.3.28f1, IL2CPP |
 | BepInEx | 6.0.0-be.764 (Unity.IL2CPP, win-x64) |
 | .NET SDK | 6.0+ |
 
-BepInEx muss einmal im Spielordner installiert und das Spiel einmal gestartet worden sein –
-erst dabei generiert Il2CppInterop die Assemblies unter `BepInEx/interop/`, gegen die
-dieses Projekt kompiliert.
+BepInEx must be installed in the game folder and the game must have been launched at least once –
+this generates the Il2CppInterop assemblies under `BepInEx/interop/` which this project compiles against.
 
-## Bauen
+## Building
 
-```
-cp Local.props.example Local.props     # GameDir auf die eigene Installation setzen
+```bash
+cp Local.props.example Local.props     # Set GameDir to your game installation path
 dotnet build
 ```
 
-Der Build legt `GwyfAimbotMod.dll` automatisch in `<GameDir>/BepInEx/plugins/` ab.
-Abschalten über `<DeployToGame>false</DeployToGame>` in `Local.props`.
+The build automatically copies `GwyfAimbotMod.dll` to `<GameDir>/BepInEx/plugins/`.
+You can disable this by setting `<DeployToGame>false</DeployToGame>` in `Local.props`.
 
-Alternativ ohne `Local.props`:
+Alternatively, without `Local.props`:
+
+```bash
+dotnet build -p:GameDir="C:\Path\To\Game"
+```
+
+## Project Structure
 
 ```
-dotnet build -p:GameDir="C:\Pfad\zum\Spiel"
-```
-
-## Projektstruktur
-
-```
-Directory.Build.props        GameDir + abgeleitete Pfade, Deploy-Schalter
-Local.props.example          Vorlage für maschinenspezifische Pfade (nicht im Git)
+Directory.Build.props        GameDir + derived paths, deploy switch
+Local.props.example          Template for machine-specific paths (not tracked in Git)
 GwyfAimbotMod/
-  Plugin.cs                  BepInEx-Einstiegspunkt, Config, IL2CPP-Typregistrierung
-  AimbotBehaviour.cs         Zielerfassung, Suchzustandsautomat, HUD-Overlay
-  TrajectorySimulator.cs     Bahnintegration
-  PhysicsParameterDump.cs    Auslesen der echten Physik-Parameter (Log + JSON)
+  Plugin.cs                  BepInEx entry point, configuration, IL2CPP type registration
+  AimbotBehaviour.cs         Target acquisition, search state machine, HUD overlay
+  TrajectorySimulator.cs     Trajectory integration
+  PhysicsParameterDump.cs    Extracts actual physics parameters (Log + JSON)
 ```
 
-## Parameter-Dump
+## Parameter Dump
 
-Ein Druck auf `[F9]` (bindbar über `BepInEx/config/com.ammar.gwyf.aimbot.cfg`,
-Abschnitt `[Dump]`, Schlüssel `DumpKey`) schreibt einmalig den gesamten Physik-Zustand
-in das BepInEx-Log und zusätzlich als JSON nach
-`BepInEx/gwyf-physics-dump_<Zeitstempel>.json` – also neben `LogOutput.log`.
+Pressing `[F9]` (configurable via `BepInEx/config/com.ammar.gwyf.aimbot.cfg`,
+section `[Dump]`, key `DumpKey`) writes the complete physics state once
+to the BepInEx log and exports it as JSON to
+`BepInEx/gwyf-physics-dump_<timestamp>.json` (alongside `LogOutput.log`).
 
-Erfasst werden:
+Captured data:
 
-| Block | Inhalt |
+| Section | Content |
 |---|---|
 | `time` | `fixedDeltaTime`, `maximumDeltaTime`, `timeScale` |
-| `physicsGlobals` | Gravitation, `bounceThreshold`, Contact-Offset, Solver-Iterationen, Depenetration, Sleep-Threshold und die übrigen prozessweiten PhysX-Statics |
-| `rigidbody` | Masse, Drag, Trägheitstensor samt Rotation, Solver-Iterationen, `collisionDetectionMode`, `interpolation`, Constraints, Momentanzustand |
-| `ballColliders` | alle Collider des Balls mit Typ, Radius, `lossyScale` und `sharedMaterial` |
-| `ballMovement` | beide Drag-Sätze, Sand-/Glue-/Umgebungs-Drag, Zustand der Drag-Umschaltung, `m_maxForce` / `minForce` |
-| `m_PowerCurve` | alle Keyframes mit Zeit, Wert, Tangenten, Gewichten und Wrap-Modes |
-| `groundProbe`, `wallProbe` | Raycast nach unten bzw. in Blickrichtung: Trefferkollider, Normale und dessen `PhysicMaterial` |
+| `physicsGlobals` | Gravity, `bounceThreshold`, contact offset, solver iterations, depenetration, sleep threshold, and other process-wide PhysX statics |
+| `rigidbody` | Mass, drag, inertia tensor and rotation, solver iterations, `collisionDetectionMode`, `interpolation`, constraints, instantaneous state |
+| `ballColliders` | All ball colliders with type, radius, `lossyScale`, and `sharedMaterial` |
+| `ballMovement` | Both drag sets, sand/glue/environment drag, drag-switch state, `m_maxForce` / `minForce` |
+| `m_PowerCurve` | All keyframes with time, value, tangents, weights, and wrap modes |
+| `groundProbe`, `wallProbe` | Raycasts downward and in look direction: hit collider, normal, and associated `PhysicMaterial` |
 
-Da Materialien pro Bahn unterschiedlich sind, lohnt sich ein Dump je Loch; jeder Druck
-legt eine eigene Datei an.
+Since physics materials vary per hole, dumping on each hole is recommended; each keypress
+creates a separate timestamped file.
 
-## Stand
+## Current State
 
-Die Bahnberechnung in `TrajectorySimulator.cs` bildet PhysX derzeit von Hand nach
-(eigener Integrator + SphereCasts) und weicht nach wenigen Kontakten deutlich vom
-Spielverhalten ab. Bekannte Ursachen: kein Drehimpuls, fehlende Drag-Umschaltung eine
-Sekunde nach dem Schlag, ignorierte Trigger-Volumes (Booster, Förderbänder, Wasser),
-abweichender Zeitschritt. Überarbeitung in Richtung separater `PhysicsScene` mit dem
-Solver des Spiels ist geplant.
+Trajectory calculation in `TrajectorySimulator.cs` currently mimics PhysX manually
+(custom integrator + SphereCasts) and diverges noticeably from game behavior after a few contacts.
+Known causes: lack of angular momentum / spin, missing drag switch one second after hit,
+ignored trigger volumes (boosters, conveyor belts, water), timestep discrepancies.
+A rework using a dedicated `PhysicsScene` with the game's solver is planned.
 
-Der Parameter-Dump ist der erste Schritt dorthin: Er liefert die Messwerte, mit denen
-die geratenen Konstanten im Simulator (`MAX_PHYSICS_SPEED`, `CUP_RADIUS`, die
-Default-Bounciness- und Reibungswerte) ersetzt werden.
+The parameter dump serves as the first step toward this goal: It provides the ground-truth measurements
+used to replace guessed constants in the simulator (`MAX_PHYSICS_SPEED`, `CUP_RADIUS`, default bounciness and friction values).
