@@ -37,6 +37,20 @@ namespace GwyfAimbotMod
         public List<CachedPoint> Path { get; set; } = new List<CachedPoint>();
         public string CreatedAt { get; set; } = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
 
+        [System.Text.Json.Serialization.JsonIgnore]
+        public bool IsValid
+        {
+            get
+            {
+                if (Power < 400f) return false;
+                if (Direction == null) return false;
+                if (Direction.X * Direction.X + Direction.Z * Direction.Z < 0.0001f) return false;
+                if (Path == null || Path.Count < 2) return false;
+                if (IsHoleInOne && MinDistance > 0.35f) return false;
+                return true;
+            }
+        }
+
         public Vector3[] GetPathArray()
         {
             if (Path == null || Path.Count == 0) return Array.Empty<Vector3>();
@@ -57,6 +71,18 @@ namespace GwyfAimbotMod
         public float FinalDistance { get; set; }
         public string Reason { get; set; } = "Missed";
         public string CreatedAt { get; set; } = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
+
+        [System.Text.Json.Serialization.JsonIgnore]
+        public bool IsValid
+        {
+            get
+            {
+                if (Power < 400f) return false;
+                if (Direction == null) return false;
+                if (Direction.X * Direction.X + Direction.Z * Direction.Z < 0.0001f) return false;
+                return true;
+            }
+        }
     }
 
     public class HoleCacheData
@@ -192,12 +218,14 @@ namespace GwyfAimbotMod
 
                 foreach (var sol in holeData.Solutions)
                 {
-                    if (sol == null) continue;
-                    float dist = Vector3.Distance(ballPos, sol.BallStartPosition.ToVector3());
-                    if (dist > 0.45f) continue; // Must be close to the same ball start position
+                    if (sol == null || !sol.IsValid) continue;
+
+                    Vector3 solStart = sol.BallStartPosition.ToVector3();
+                    float horizDist = Vector2.Distance(new Vector2(ballPos.x, ballPos.z), new Vector2(solStart.x, solStart.z));
+                    if (horizDist > 0.35f) continue; // Must match the ball's tee/lie position horizontally
 
                     // Score calculation: Verified Live HIO is top priority (-1000), simulated HIO (-500), then closer approach
-                    float score = dist * 2f;
+                    float score = horizDist * 2f;
                     if (sol.IsLiveVerified) score -= 1000f;
                     else if (sol.IsHoleInOne) score -= 500f;
                     else score += sol.MinDistance * 10f;
@@ -231,6 +259,7 @@ namespace GwyfAimbotMod
             bool isLiveVerified)
         {
             if (!Plugin.UseSolutionCache.Value) return;
+            if (power < 400f || dir.sqrMagnitude < 0.001f || path == null || path.Length < 2) return;
 
             lock (_lock)
             {
@@ -253,7 +282,11 @@ namespace GwyfAimbotMod
                 CachedSolution existing = null;
                 foreach (var s in holeData.Solutions)
                 {
-                    if (Vector3.Distance(ballPos, s.BallStartPosition.ToVector3()) < 0.35f
+                    if (s == null) continue;
+                    Vector3 sStart = s.BallStartPosition.ToVector3();
+                    float horizDist = Vector2.Distance(new Vector2(ballPos.x, ballPos.z), new Vector2(sStart.x, sStart.z));
+
+                    if (horizDist < 0.35f
                         && Vector3.Angle(dir, s.Direction.ToVector3()) < 2.0f
                         && Mathf.Abs(power - s.Power) / Mathf.Max(1f, s.Power) < 0.04f)
                     {
@@ -300,9 +333,14 @@ namespace GwyfAimbotMod
                 if (isHoleInOne && holeData.Blacklist != null)
                 {
                     holeData.Blacklist.RemoveAll(b =>
-                        Vector3.Distance(ballPos, b.BallStartPosition.ToVector3()) < 0.35f
-                        && Vector3.Angle(dir, b.Direction.ToVector3()) < 2.0f
-                        && Mathf.Abs(power - b.Power) / Mathf.Max(1f, b.Power) < 0.04f);
+                    {
+                        if (b == null) return false;
+                        Vector3 bStart = b.BallStartPosition.ToVector3();
+                        float hDist = Vector2.Distance(new Vector2(ballPos.x, ballPos.z), new Vector2(bStart.x, bStart.z));
+                        return hDist < 0.35f
+                            && Vector3.Angle(dir, b.Direction.ToVector3()) < 2.0f
+                            && Mathf.Abs(power - b.Power) / Mathf.Max(1f, b.Power) < 0.04f;
+                    });
                 }
 
                 Save();
@@ -321,6 +359,7 @@ namespace GwyfAimbotMod
             string reason)
         {
             if (!Plugin.UseBlacklist.Value) return;
+            if (power < 400f || dir.sqrMagnitude < 0.001f) return;
 
             lock (_lock)
             {
@@ -343,7 +382,11 @@ namespace GwyfAimbotMod
                 bool exists = false;
                 foreach (var b in holeData.Blacklist)
                 {
-                    if (Vector3.Distance(ballPos, b.BallStartPosition.ToVector3()) < 0.35f
+                    if (b == null) continue;
+                    Vector3 bStart = b.BallStartPosition.ToVector3();
+                    float horizDist = Vector2.Distance(new Vector2(ballPos.x, ballPos.z), new Vector2(bStart.x, bStart.z));
+
+                    if (horizDist < 0.35f
                         && Vector3.Angle(dir, b.Direction.ToVector3()) < 1.25f
                         && Mathf.Abs(power - b.Power) / Mathf.Max(1f, b.Power) < 0.035f)
                     {
@@ -367,10 +410,15 @@ namespace GwyfAimbotMod
                     if (holeData.Solutions != null)
                     {
                         holeData.Solutions.RemoveAll(s =>
-                            !s.IsLiveVerified
-                            && Vector3.Distance(ballPos, s.BallStartPosition.ToVector3()) < 0.35f
-                            && Vector3.Angle(dir, s.Direction.ToVector3()) < 1.25f
-                            && Mathf.Abs(power - s.Power) / Mathf.Max(1f, s.Power) < 0.035f);
+                        {
+                            if (s == null) return false;
+                            Vector3 sStart = s.BallStartPosition.ToVector3();
+                            float hDist = Vector2.Distance(new Vector2(ballPos.x, ballPos.z), new Vector2(sStart.x, sStart.z));
+                            return !s.IsLiveVerified
+                                && hDist < 0.35f
+                                && Vector3.Angle(dir, s.Direction.ToVector3()) < 1.25f
+                                && Mathf.Abs(power - s.Power) / Mathf.Max(1f, s.Power) < 0.035f;
+                        });
                     }
 
                     Save();
@@ -398,7 +446,11 @@ namespace GwyfAimbotMod
 
                 foreach (var b in holeData.Blacklist)
                 {
-                    if (Vector3.Distance(ballPos, b.BallStartPosition.ToVector3()) < 0.40f
+                    if (b == null || !b.IsValid) continue;
+                    Vector3 bStart = b.BallStartPosition.ToVector3();
+                    float horizDist = Vector2.Distance(new Vector2(ballPos.x, ballPos.z), new Vector2(bStart.x, bStart.z));
+
+                    if (horizDist < 0.40f
                         && Vector3.Angle(dir, b.Direction.ToVector3()) < 1.25f
                         && Mathf.Abs(power - b.Power) / Mathf.Max(1f, b.Power) < 0.035f)
                     {

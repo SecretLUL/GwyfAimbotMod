@@ -468,9 +468,9 @@ namespace GwyfAimbotMod
 
                 if (ShotSolutionCache.TryGetSolution(sceneName, holeNumber, ballPos, out var cachedSol))
                 {
-                    if (cachedSol.IsHoleInOne)
+                    if (cachedSol.IsHoleInOne && cachedSol.IsValid)
                     {
-                        _winningDirection = cachedSol.Direction.ToVector3();
+                        _winningDirection = cachedSol.Direction.ToVector3().normalized;
                         _winningPower = cachedSol.Power;
                         _winningMinDist = cachedSol.MinDistance;
                         _isHoleInOne = true;
@@ -652,7 +652,10 @@ namespace GwyfAimbotMod
 
             if (_hasSolution && _targetBall != null && _winningPath != null && _winningPath.Length > 0)
             {
-                if (Vector3.Distance(_targetBall.transform.position, _winningPath[0]) > 0.12f)
+                Vector3 ballPos = _targetBall.transform.position;
+                Vector3 pathStart = _winningPath[0];
+                float horizDist = Vector2.Distance(new Vector2(ballPos.x, ballPos.z), new Vector2(pathStart.x, pathStart.z));
+                if (horizDist > 0.30f)
                 {
                     _hasSolution = false;
                 }
